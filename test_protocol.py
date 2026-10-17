@@ -5,6 +5,25 @@ import unittest
 from unittest.mock import Mock, patch
 
 from vesta import Frames, HEADER, Viewer, IsolatedViewer, Transport, frame_health, RequestTimeout
+from vesta import decoder_command
+from streams import worker_command
+
+
+class RuntimeCommandTests(unittest.TestCase):
+    def test_linux_worker_uses_current_interpreter_without_rosetta(self):
+        with patch('streams.sys.platform', 'linux'), patch('streams.sys.executable', '/venv/bin/python'):
+            command = worker_command('--worker', 4, 1)
+        self.assertEqual(command[0], '/venv/bin/python')
+        self.assertEqual(command[-3:], ['--worker', '4', '1'])
+        self.assertNotIn('/usr/bin/arch', command)
+
+    def test_configured_ffmpeg_decodes_both_codecs_with_one_thread(self):
+        with patch.dict('os.environ', {'FFMPEG_BINARY': '/usr/bin/ffmpeg'}):
+            hevc, avc = decoder_command(3, 12), decoder_command(2, 25)
+        self.assertEqual(hevc[0], '/usr/bin/ffmpeg')
+        self.assertIn('hevc', hevc)
+        self.assertIn('h264', avc)
+        self.assertEqual(hevc[hevc.index('-threads')+1], '1')
 
 
 def keyframe(data, codec=3):

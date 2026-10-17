@@ -2,7 +2,7 @@
 
 ## Scope and workflow
 
-- Local development only. Do not deploy to the VPS without a new explicit request.
+- Deployment to the user's VPS and bogdanova34.ru is authorized by the current request. GitHub: public AlexToros/video-viewer; main requires owner review for collaborators, with owner bypass. Never give collaborators administrator access merely to push changes.
 - Keep changes in small coherent commits. Never commit `.env`, `.runtime/`, databases, SDK binaries, secrets, diagnostics or camera images.
 - Shared global user instructions and `/Users/aspyankov/.codex/RTK.md` apply. Prefix shell commands with `rtk`.
 - This file holds repository architecture and implementation context as requested by the user. Temporary reports and detailed task journals belong outside git.
@@ -33,12 +33,13 @@
 - Active users/rights/sessions are an in-memory bulk snapshot, refreshed atomically after mutations. This currently requires one portal process; replicas require shared invalidation and source coordination.
 - `streams.py`: one lazy shared producer per unique camera; frames stay in memory. Stop unused producers. Do not duplicate upstream connections per viewer/tile.
 - `vesta.py` owns only the native transport/decoder. Credentials enter worker stdin, never command-line arguments. Native media workers skip redundant catalog queries; catalog discovery is separate.
-- `gateway.py` and `gateway_client.py`: optional token-authenticated media worker for a Linux portal container. Browser access to the gateway is forbidden. Full Linux camera transport remains a separate prerequisite; macOS dylib is not portable.
+- `gateway.py` and `gateway_client.py`: optional token-authenticated media worker. Browser access to the gateway is forbidden. Linux x86_64 can run native workers with CAMERA_SDK_PATH pointing to its separate ELF library and FFMPEG_BINARY=/usr/bin/ffmpeg; macOS keeps Rosetta and dylib. Proprietary binaries stay outside git and are mounted read-only.
 - `app.js`, `style.css`: vanilla UI; wall presets 1/4/6/9/16, custom widths and reordering. Tile picture height follows decoded image aspect ratio; a ResizeObserver measures intrinsic tiles for dense CSS grid row spans. Legacy saved height stays compatible but no longer stretches the picture. Keep captions minimal. Camera chooser supports search/groups; preview shares the existing WebSocket and cached frames. Mobile layout may reduce visible columns without changing the saved layout. Keyboard/touch reordering is available in the tile options dialog.
 - Invitation links must be actual clickable anchors. Handle hash navigation in an already open app; ignore late responses from a previous route so they cannot replace the registration form.
 - Admin tab navigation renders immediately and ignores responses for detached tab bodies. Show a retry action for failed loads. Mobile admin tables wrap into cards, coarse-pointer tile controls have larger touch targets. Disconnect tile observers on route/logout; clear fullscreen layout when leaving the session.
 - Manifest/icons/service worker implement PWA. Only public app-shell assets may enter CacheStorage. Phone installation requires trusted HTTPS; desktop localhost works for local preview.
-- `compose.yaml`: PostgreSQL, portal and nginx, persistent DB/key volumes, file secrets. Only nginx publishes a loopback port. No VPS deployment is authorized.
+- `compose.yaml` keeps the local optional gateway setup. `compose.production.yaml` runs native Linux transport, PostgreSQL and nginx with memory/log limits; only nginx publishes 80/443. Encrypted connection data requires the matching /data/secret.key when migrating the DB. Do not expose initial bootstrap publicly before restoring the existing user database.
+- Production TLS: Certbot webroot /var/www/letsencrypt, HTTP challenge in nginx/acme.conf, nginx/production.conf after issuance. scripts/enable-https.sh installs the deploy hook and enables certbot.timer; scripts/renew-certificate.sh validates and reloads nginx after renewal.
 
 ## Existing video transport
 
@@ -65,5 +66,4 @@
 
 - Local portal implemented with PostgreSQL/PWA; the user has created a real account. Preserve users and layouts during routine development and restarts.
 - User confirmed live video works with VPN disabled. Earlier missing-media diagnostics do not establish a recorder or decoder fault; do not resume connection experiments without a new reason.
-- Docker configuration is prepared; Docker daemon was stopped during development, so container build/run is not yet verified.
-- The VPS was cleared of GRACE in earlier work and is not part of this implementation.
+- VPS: Ubuntu x86_64; deploy from a root session. aspyankov has SSH access but no sudo/Docker privilege; do not grant root-equivalent group membership as a deployment shortcut.

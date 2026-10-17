@@ -16,9 +16,9 @@ ROOT = Path(__file__).resolve().parent
 
 
 def worker_command(mode, *args):
-    if sys.platform != 'darwin':
-        raise RuntimeError('Для Linux необходимо подключить транспорт камер через STREAM_GATEWAY')
-    return ['/usr/bin/arch', '-x86_64', '/usr/bin/python3', str(ROOT / 'vesta.py'), mode, *map(str,args)]
+    interpreter = (['/usr/bin/arch', '-x86_64', '/usr/bin/python3']
+                   if sys.platform == 'darwin' else [sys.executable])
+    return [*interpreter, str(ROOT / 'vesta.py'), mode, *map(str,args)]
 
 
 async def terminate(process):

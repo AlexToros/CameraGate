@@ -1,4 +1,4 @@
-"""Local VestaCloud viewer. Credentials and decoded frames stay on this Mac."""
+"""Isolated VestaCloud transport worker; credentials and frames stay server-side."""
 import ctypes as C
 import hashlib
 import json
@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import queue
 import signal
+import shutil
 import socket
 import struct
 import subprocess
@@ -38,7 +39,9 @@ def diagnostic(event, **fields):
 
 
 def decoder_command(codec, fps):
-    binary = next((ROOT / '.runtime/packages/imageio_ffmpeg/binaries').glob('ffmpeg-*'))
+    binary = os.environ.get('FFMPEG_BINARY') or shutil.which('ffmpeg')
+    if not binary:
+        binary = next((ROOT / '.runtime/packages/imageio_ffmpeg/binaries').glob('ffmpeg-*'))
     return [str(binary), '-hide_banner', '-loglevel', 'error',
             '-probesize', '32', '-analyzeduration', '1', '-fpsprobesize', '0',
             '-threads', '1', '-flags', 'low_delay', '-r', str(fps),
@@ -130,7 +133,9 @@ class Transport:
                         ('receive', receive_cb), ('reserved', C.c_void_p * 3)]
 
         self.callbacks = Callbacks(connected, disconnected, received)
-        self.sdk = C.CDLL(str(ROOT / '.runtime/libnetsdk.dylib'))
+        library = os.environ.get('CAMERA_SDK_PATH') or str(ROOT / '.runtime' / (
+            'libnetsdk.dylib' if sys.platform == 'darwin' else 'libxmnetsdk.so'))
+        self.sdk = C.CDLL(library)
         self._bind('vv_nat_init', [C.c_char_p, C.c_ushort, C.c_char_p, C.c_ushort,
                                   C.POINTER(Callbacks), C.c_int])
         self._bind('vv_nat_get_status', [])

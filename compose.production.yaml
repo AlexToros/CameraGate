@@ -1,0 +1,58 @@
+name: home-cameras
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: video_viewer
+      POSTGRES_USER: viewer
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets: [db_password]
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    command: [postgres, -c, shared_buffers=64MB, -c, max_connections=30]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U viewer -d video_viewer']
+      interval: 5s
+      timeout: 3s
+      retries: 15
+    restart: unless-stopped
+    mem_limit: 192m
+    logging: &logging
+      driver: json-file
+      options: {max-size: 10m, max-file: '3'}
+  app:
+    build: .
+    environment:
+      DATABASE_URL: postgresql://viewer@db:5432/video_viewer
+      DB_PASSWORD_FILE: /run/secrets/db_password
+      PUBLIC_ORIGIN: https://bogdanova34.ru
+      COOKIE_SECURE: '1'
+      CAMERA_SDK_PATH: /vendor/libxmnetsdk.so
+      FFMPEG_BINARY: /usr/bin/ffmpeg
+    secrets: [db_password]
+    volumes:
+      - ./.runtime/portal-data:/data
+      - ./.runtime/libxmnetsdk.so:/vendor/libxmnetsdk.so:ro
+    depends_on:
+      db: {condition: service_healthy}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 15s
+    mem_limit: 448m
+    logging: *logging
+  nginx:
+    image: nginx:stable-alpine
+    ports: ['80:80', '443:443']
+    volumes:
+      - ./.runtime/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - /var/www/letsencrypt:/var/www/letsencrypt:ro
+    depends_on:
+      app: {condition: service_healthy}
+    restart: unless-stopped
+    mem_limit: 64m
+    logging: *logging
+volumes:
+  postgres_data:
+secrets:
+  db_password:
+    file: .runtime/postgres-password
