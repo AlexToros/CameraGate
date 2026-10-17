@@ -23,6 +23,7 @@ p{line-height:1.6}
 small,.muted{color:var(--muted);font-weight:400}
 a{color:var(--blue)}
 .auth{max-width:450px;margin:8vh auto;padding:32px;background:var(--panel);border-top:4px solid var(--blue);border-radius:6px}
+.auth h1,dialog h2{overflow-wrap:anywhere}
 .auth .brand-mark{font-size:42px;color:var(--blue);line-height:1;margin-bottom:22px}
 .stack{display:grid;gap:16px}
 .stack .primary{margin-top:4px}
@@ -154,7 +155,22 @@ body.fullscreen .exit-fullscreen{display:flex;position:fixed;bottom:max(12px,env
  .camera-preview{padding:10px}
  .camera-preview h2{font-size:14px;line-height:36px;margin-bottom:8px}
  th,td{padding:12px 7px}
+ .table-wrap{overflow:visible}
+ .table-wrap table,.table-wrap tbody{display:block}
+ .table-wrap thead{display:none}
+ .table-wrap tr{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:14px 0;border-bottom:1px solid var(--line)}
+ .table-wrap td{display:block;padding:0;border:0;overflow-wrap:anywhere;min-width:0}
+ .table-wrap td:first-child{flex-basis:100%;font-weight:600}
+ .table-wrap td:last-child{margin-left:auto}
+ .table-wrap td button{min-height:44px}
  .row.between h2{margin-bottom:10px}
+}
+@media(pointer:coarse){
+ .tile-head{height:40px}
+ .camera-trigger{height:40px;min-height:40px;line-height:40px}
+ .camera-trigger svg{top:13px}
+ .tile-menu{min-width:40px;min-height:40px}
+ .tile-expand{opacity:1;min-width:40px;min-height:40px}
 }
 @media(max-width:520px){
  .brand strong,.identity{display:none}

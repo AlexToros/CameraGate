@@ -36,6 +36,7 @@
 - `gateway.py` and `gateway_client.py`: optional token-authenticated media worker for a Linux portal container. Browser access to the gateway is forbidden. Full Linux camera transport remains a separate prerequisite; macOS dylib is not portable.
 - `app.js`, `style.css`: vanilla UI; wall presets 1/4/6/9/16, custom widths and reordering. Tile picture height follows decoded image aspect ratio; a ResizeObserver measures intrinsic tiles for dense CSS grid row spans. Legacy saved height stays compatible but no longer stretches the picture. Keep captions minimal. Camera chooser supports search/groups; preview shares the existing WebSocket and cached frames. Mobile layout may reduce visible columns without changing the saved layout. Keyboard/touch reordering is available in the tile options dialog.
 - Invitation links must be actual clickable anchors. Handle hash navigation in an already open app; ignore late responses from a previous route so they cannot replace the registration form.
+- Admin tab navigation renders immediately and ignores responses for detached tab bodies. Show a retry action for failed loads. Mobile admin tables wrap into cards, coarse-pointer tile controls have larger touch targets. Disconnect tile observers on route/logout; clear fullscreen layout when leaving the session.
 - Manifest/icons/service worker implement PWA. Only public app-shell assets may enter CacheStorage. Phone installation requires trusted HTTPS; desktop localhost works for local preview.
 - `compose.yaml`: PostgreSQL, portal and nginx, persistent DB/key volumes, file secrets. Only nginx publishes a loopback port. No VPS deployment is authorized.
 
@@ -56,6 +57,7 @@
 - `.runtime/venv/bin/python -m unittest -v test_protocol.py test_store.py test_api.py test_gateway.py`; PostgreSQL suites require TEST_DATABASE_URL and use disposable schemas.
 - Verify authorization, concurrent bootstrap/invite consumption, active stream revocation/blocking and layout persistence against real PostgreSQL.
 - Exercise Chromium desktop/mobile and real streams separately. Artificial image fixtures prove UI/ACL behavior, not real camera availability.
+- For wall changes, verify actual frame proportions (including 4:3 and widescreen), non-overlapping tiles, search, shared preview, width/order, add/remove and persistence. Check 320/390/768/1440 widths, touch controls and delayed admin responses without touching real accounts.
 - Keep CSP enabled during product validation. Playwright waitForFunction uses eval and conflicts with CSP; use locators/polling instead of weakening product policy.
 - `node --check app.js`, `node --check sw.js`, `docker compose config --quiet`.
 
