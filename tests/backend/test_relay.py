@@ -70,14 +70,20 @@ class FragmentsTests(unittest.TestCase):
         self.assertEqual(records(pack_encoded({1:source},first)[1]),[(1,2,b'next')])
         self.assertEqual(records(pack_encoded({1:source},second)[1]),[(1,2,b'next')])
 
-    def test_new_keyframe_does_not_reset_current_viewer_but_resets_slow_viewer(self):
+    def test_gop_boundary_retains_unsent_tail_without_reinitializing_player(self):
         source = initialized();current={};slow={}
         pack_encoded({1:source},current);pack_encoded({1:source},slow)
         source.feed(dict(type='media',generation='first',key=False),b'missed')
         pack_encoded({1:source},current)
         source.feed(dict(type='media',generation='first',key=True),b'new-key')
         self.assertEqual([r[1] for r in records(pack_encoded({1:source},current)[1])],[3])
-        self.assertEqual([r[1] for r in records(pack_encoded({1:source},slow)[1])],[1,3])
+        self.assertEqual(records(pack_encoded({1:source},slow)[1]),[(1,2,b'missed'),(1,3,b'new-key')])
+        newest={}
+        self.assertEqual([r[1] for r in records(pack_encoded({1:source},newest)[1])],[1,3])
+        source.feed(dict(type='media',generation='first',key=False),b'another')
+        source.feed(dict(type='media',generation='first',key=True),b'third-key')
+        source.feed(dict(type='media',generation='first',key=True),b'fourth-key')
+        self.assertEqual(records(pack_encoded({1:source},slow)[1]),[(1,3,b'fourth-key')])
 
     def test_generation_restart_stale_packets_and_buffer_limit(self):
         source=initialized();sent={};pack_encoded({1:source},sent)

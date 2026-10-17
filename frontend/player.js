@@ -30,6 +30,7 @@
           if(this.closed)return;
           try {
             this.buffer=this.media.addSourceBuffer(stream.mime);this.media.duration=Infinity;
+            if(this.offset!==null) { this.buffer.timestampOffset=this.offset;this.offsetApplied=true; }
             this.buffer.addEventListener("updateend",()=>this.pump());
             this.buffer.addEventListener("error",()=>this.fail("Ошибка воспроизведения. Переподключаемся…"));
             this.pump();
@@ -61,18 +62,19 @@
       try {
         const ranges=this.buffer.buffered;
         if(ranges.length) {
-          const start=ranges.start(0),end=ranges.end(ranges.length-1);
+          const start=ranges.start(ranges.length-1),end=ranges.end(ranges.length-1);
           if(!this.started || end-this.video.currentTime>1.5 || this.video.currentTime<start) {
             this.video.currentTime=Math.max(start,end-.25);this.started=true;
           }
           this.video.play().catch(()=>{});
-          if(end-start>8 && this.video.currentTime>start+4) { this.buffer.remove(start,this.video.currentTime-3);return; }
+          const earliest=ranges.start(0);
+          if(end-earliest>8 && this.video.currentTime>earliest+4) { this.buffer.remove(earliest,this.video.currentTime-3);return; }
         }
         if(this.head>=this.queue.length)return;
         const data=this.queue[this.head++];this.bytes-=data.byteLength;
         if(this.head===this.queue.length) { this.queue=[];this.head=0; }
         else if(this.head>=64 && this.head*2>=this.queue.length) { this.queue=this.queue.slice(this.head);this.head=0; }
-        if(this.offset!==null)this.buffer.timestampOffset=this.offset;
+        if(this.offset!==null && !this.offsetApplied) { this.buffer.timestampOffset=this.offset;this.offsetApplied=true; }
         this.buffer.appendBuffer(data);
       } catch { this.fail("Ошибка видеопотока. Переподключаемся…"); }
     }

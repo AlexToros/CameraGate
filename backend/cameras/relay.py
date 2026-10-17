@@ -23,11 +23,13 @@ class EncodedSource:
         self.state = 'Подключение к камере…'
         self.generation, self.init, self.mime = None, b'', ''
         self.frames = []
+        self.key_index, self.gop_size = 0, 0
         self.sequence, self.size, self.key_at, self.last_frame = 0, 0, 0, 0
 
     def reset(self, state='Соединение прервано. Повтор подключения…'):
         self.state, self.init, self.mime = state, b'', ''
         self.frames.clear()
+        self.key_index = self.gop_size = 0
         self.size = self.last_frame = 0
 
     def feed(self, meta, data):
@@ -42,18 +44,25 @@ class EncodedSource:
         elif kind == 'media' and self.init and meta['generation'] == self.generation:
             now = time.monotonic()
             if meta['key']:
-                self.frames.clear()
-                self.size, self.key_at = 0, now
+                # Retain the preceding GOP so a polling viewer can still receive
+                # its tail when the next keyframe arrives between two sends.
+                if self.key_index:
+                    self.frames = self.frames[self.key_index:]
+                    self.size = self.gop_size
+                self.key_index = len(self.frames)
+                self.gop_size, self.key_at = 0, now
             elif not self.frames:
                 return
             if self.size + len(data) > MAX_GOP or now-self.key_at > 15:
                 self.frames.clear()
                 self.size = 0
+                self.key_index = self.gop_size = 0
                 self.state = 'Ожидание ключевого кадра…'
                 return
             self.sequence += 1
-            self.frames.append((self.sequence, data))
+            self.frames.append((self.sequence, data, bool(meta['key'])))
             self.size += len(data)
+            self.gop_size += len(data)
             self.last_frame, self.state = now, 'Прямой эфир'
 
 
@@ -73,16 +82,19 @@ def pack_encoded(sources, sent):
             continue
         previous = sent.get(cid)
         first, last = source.frames[0][0], source.frames[-1][0]
-        reset = not previous or previous[0] != source.generation or previous[1] < first-1
-        sequence = first-1 if reset else previous[1]
+        key = source.frames[source.key_index][0]
+        reset = not previous or previous[0] != source.generation
+        sequence = key-1 if reset or previous[1]<first-1 else previous[1]
         if sequence == last:
             continue
         pending = []
         if reset:
             mime = source.mime.encode('ascii')
             pending.append(packet(cid, 1, struct.pack('!H', len(mime))+mime+source.init))
-        # At most one bounded GOP per source. No queue grows with viewer age.
-        pending.extend(packet(cid, 3 if number == first else 2, data) for number, data in source.frames[sequence-first+1:])
+        # Existing viewers get a contiguous tail across a GOP boundary. A slow
+        # viewer jumps to the latest keyframe without recreating its MediaSource.
+        pending.extend(packet(cid, 3 if keyframe else 2, data)
+            for number, data, keyframe in source.frames[sequence-first+1:])
         size = sum(map(len, pending))
         if total+size > MAX_BATCH:
             continue
@@ -144,6 +156,7 @@ class RelayPool:
             self.cache_bytes -= source.size
             source.frames.clear()
             source.size = source.last_frame = 0
+            source.key_index = source.gop_size = 0
             source.state = 'Достигнут лимит буфера видео. Ожидание ключевого кадра…'
         if meta['type'] == 'status' and meta.get('error'):
             LOG.warning('camera_retry cid=%d stage=%s error=%s',source.cid,
