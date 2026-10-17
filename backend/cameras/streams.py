@@ -6,19 +6,18 @@ No database or authorization queries occur in the media path.
 """
 import asyncio
 import json
-from pathlib import Path
 import struct
 import sys
 import time
 import os
 
-ROOT = Path(__file__).resolve().parent
+from ..paths import ROOT
 
 
 def worker_command(mode, *args):
     interpreter = (['/usr/bin/arch', '-x86_64', '/usr/bin/python3']
                    if sys.platform == 'darwin' else [sys.executable])
-    return [*interpreter, str(ROOT / 'vesta.py'), mode, *map(str,args)]
+    return [*interpreter, '-m', 'backend.cameras.vesta', mode, *map(str,args)]
 
 
 async def terminate(process):
@@ -48,7 +47,7 @@ class Source:
                 try:
                     self.last_frame = 0
                     self.process = await asyncio.create_subprocess_exec(*worker_command('--worker', self.cid-1, 1),
-                        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+                        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, cwd=ROOT)
                     self.process.stdin.write((json.dumps(dict(config=self.config,channel=self.cid-1,generation=1))+'\n').encode())
                     await self.process.stdin.drain()
                     started = time.monotonic()
@@ -110,7 +109,7 @@ class StreamPool:
 
     async def catalog(self):
         process = await asyncio.create_subprocess_exec(*worker_command('--catalog'),
-            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, cwd=ROOT)
         try:
             output, _ = await asyncio.wait_for(process.communicate((json.dumps(self.config)+'\n').encode()), 45)
             if process.returncode:
@@ -138,6 +137,6 @@ def pack_frames(sources, sent):
 
 def make_pool(config):
     if os.environ.get('STREAM_GATEWAY'):
-        from gateway_client import RemotePool
+        from .gateway_client import RemotePool
         return RemotePool(config)
     return StreamPool(config)

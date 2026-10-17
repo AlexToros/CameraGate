@@ -12,10 +12,10 @@ import time
 from urllib.parse import urlsplit
 
 from aiohttp import web, WSMsgType
-from store import Store, Problem
-from streams import make_pool, pack_frames
+from .store import Store, Problem
+from .cameras.streams import make_pool, pack_frames
+from .paths import ROOT, FRONTEND
 
-ROOT = Path(__file__).resolve().parent
 COOKIE = 'viewer_session'
 LOG = logging.getLogger('portal')
 PORTAL = web.AppKey('portal', object)
@@ -285,9 +285,9 @@ def create_app(store, streams=None, secure=False, auto_sync=True):
     app.router.add_get('/api/live',portal.live)
     app.router.add_route('*','/api/{tail:.*}',portal.api)
     assets = {'/':'index.html','/app.js':'app.js','/style.css':'style.css','/manifest.webmanifest':'manifest.webmanifest',
-              '/sw.js':'sw.js','/icon-192.png':'icon-192.png','/icon-512.png':'icon-512.png','/apple-touch-icon.png':'apple-touch-icon.png'}
+              '/sw.js':'sw.js','/icon-192.png':'icons/icon-192.png','/icon-512.png':'icons/icon-512.png','/apple-touch-icon.png':'icons/apple-touch-icon.png'}
     async def asset(request):
-        return web.FileResponse(ROOT/assets[request.path])
+        return web.FileResponse(FRONTEND/assets[request.path])
     app.router.add_get('/',asset)
     for path in assets.keys()-{'/'}:
         app.router.add_get(path,asset)

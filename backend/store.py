@@ -19,7 +19,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
-ROOT = Path(__file__).resolve().parent
+from .paths import ROOT, DATABASE
 
 
 class Problem(Exception):
@@ -104,7 +104,7 @@ class Store:
         self.dummy_hash = password_hash(secrets.token_urlsafe(24))
         with self.pool.connection() as conn:
             conn.execute('SELECT pg_advisory_xact_lock(802701)')
-            conn.execute((ROOT / 'schema.sql').read_text(), prepare=False)
+            conn.execute((DATABASE / 'schema.sql').read_text(), prepare=False)
             self._prune_invitations(conn)
         self.refresh()
 

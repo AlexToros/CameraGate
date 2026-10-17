@@ -1,7 +1,7 @@
 #!/bin/sh
 # Downloads the original manufacturer transport; never installs the VMS app.
 set -eu
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/../.."
 mkdir -p .runtime
 if [ ! -f .runtime/libnetsdk.dylib ]; then
   curl --fail --location --output .runtime/vesta.rar 'https://t54.ru/downloads/vesta/VMS_VeSta_MACOS_V1.21.0.2.T.20210202.rar'
@@ -18,5 +18,5 @@ uv pip install --python /usr/bin/python3 --target .runtime/packages imageio-ffmp
 if [ ! -x .runtime/venv/bin/python ]; then
   uv venv --python 3.14 .runtime/venv
 fi
-uv pip install --python .runtime/venv/bin/python -r requirements.txt
-echo 'Готово. Запуск: sh start.sh'
+uv pip install --python .runtime/venv/bin/python -r backend/requirements.txt
+echo 'Готово. Запуск: sh scripts/dev/start.sh'

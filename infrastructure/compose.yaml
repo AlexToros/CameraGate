@@ -15,7 +15,9 @@ services:
       retries: 15
     restart: unless-stopped
   app:
-    build: .
+    build:
+      context: ..
+      dockerfile: infrastructure/docker/Dockerfile
     environment:
       DATABASE_URL: postgresql://viewer@db:5432/video_viewer
       DB_PASSWORD_FILE: /run/secrets/db_password
@@ -43,6 +45,6 @@ volumes:
   portal_data:
 secrets:
   db_password:
-    file: .runtime/postgres-password
+    file: ../.runtime/postgres-password
   gateway_token:
-    file: .runtime/gateway.key
+    file: ../.runtime/gateway.key

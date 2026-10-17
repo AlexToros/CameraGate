@@ -4,14 +4,14 @@ import threading
 import unittest
 from unittest.mock import Mock, patch
 
-from vesta import Frames, HEADER, Viewer, IsolatedViewer, Transport, frame_health, RequestTimeout
-from vesta import decoder_command
-from streams import worker_command
+from backend.cameras.vesta import Frames, HEADER, Viewer, IsolatedViewer, Transport, frame_health, RequestTimeout
+from backend.cameras.vesta import decoder_command
+from backend.cameras.streams import worker_command
 
 
 class RuntimeCommandTests(unittest.TestCase):
     def test_linux_worker_uses_current_interpreter_without_rosetta(self):
-        with patch('streams.sys.platform', 'linux'), patch('streams.sys.executable', '/venv/bin/python'):
+        with patch('backend.cameras.streams.sys.platform', 'linux'), patch('backend.cameras.streams.sys.executable', '/venv/bin/python'):
             command = worker_command('--worker', 4, 1)
         self.assertEqual(command[0], '/venv/bin/python')
         self.assertEqual(command[-3:], ['--worker', '4', '1'])
@@ -134,10 +134,10 @@ class RecoveryTests(unittest.TestCase):
             return (255, 0, 1, 0, 0, 0, 1412, len(audio)), audio
 
         transport.receive.side_effect = receive
-        with patch('vesta.credentials', return_value={'SERIAL_NUM': 'placeholder'}), \
-             patch('vesta.discover', return_value='127.0.0.1'), \
-             patch('vesta.Transport', return_value=transport), \
-             patch('vesta.time.monotonic', side_effect=lambda: clock[0]):
+        with patch('backend.cameras.vesta.credentials', return_value={'SERIAL_NUM': 'placeholder'}), \
+             patch('backend.cameras.vesta.discover', return_value='127.0.0.1'), \
+             patch('backend.cameras.vesta.Transport', return_value=transport), \
+             patch('backend.cameras.vesta.time.monotonic', side_effect=lambda: clock[0]):
             viewer = Viewer()
             viewer.run()
         self.assertEqual(viewer.failure, 'decoded_frames_timeout')
@@ -152,9 +152,9 @@ class RecoveryTests(unittest.TestCase):
         transport.login.return_value = {'ChannelNum': 36, 'AliveInterval': 21}
         viewer = Viewer({'SERIAL_NUM':'placeholder'})
         viewer.catalog_required = False
-        with patch('vesta.discover',return_value='127.0.0.1'), \
-             patch('vesta.Transport',return_value=transport), \
-             patch('vesta.frame_health',return_value='media_timeout'):
+        with patch('backend.cameras.vesta.discover',return_value='127.0.0.1'), \
+             patch('backend.cameras.vesta.Transport',return_value=transport), \
+             patch('backend.cameras.vesta.frame_health',return_value='media_timeout'):
             viewer.run()
         transport.request.assert_not_called()
         transport.login.assert_called_once()
@@ -167,7 +167,7 @@ class RecoveryTests(unittest.TestCase):
         viewer.child.poll.return_value = None
         viewer.stop = Mock()
         viewer.stop.wait.side_effect = [False, False, True]
-        with patch('vesta.time.monotonic', side_effect=[10, 13]):
+        with patch('backend.cameras.vesta.time.monotonic', side_effect=[10, 13]):
             viewer.supervise()
         viewer.child.terminate.assert_called_once()
         viewer.child.kill.assert_called_once()

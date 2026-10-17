@@ -1,7 +1,7 @@
 #!/bin/sh
 # A project-owned cluster, no launch agent and no TCP listener.
 set -eu
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 PG_BIN="${PG_BIN:-/opt/homebrew/opt/postgresql@17/bin}"
 if [ ! -x "$PG_BIN/pg_ctl" ]; then
   echo 'Установите PostgreSQL 17 (brew install postgresql@17) или задайте DATABASE_URL.' >&2

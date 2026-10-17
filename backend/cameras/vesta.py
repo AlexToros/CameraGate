@@ -16,7 +16,7 @@ import threading
 import time
 import uuid
 
-ROOT = Path(__file__).resolve().parent
+from ..paths import ROOT
 HEADER = struct.Struct('<BB2xIIBBHI')
 OUT = sys.stdout
 LOG = logging.getLogger('viewer')
@@ -677,9 +677,9 @@ class IsolatedViewer(Viewer):
             self.last_frame = 0
             self.termination = None
             self.child = subprocess.Popen([
-                '/usr/bin/arch', '-x86_64', '/usr/bin/python3', str(ROOT / 'vesta.py'),
+                '/usr/bin/arch', '-x86_64', '/usr/bin/python3', '-m', 'backend.cameras.vesta',
                 '--worker', str(channel), str(generation)], stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, cwd=ROOT)
             # Covers a selection arriving while Popen was starting.
             self.child.stdin.write((json.dumps({'channel': self.selected, 'generation': self.generation, 'config': self.config}) + '\n').encode())
             self.child.stdin.flush()

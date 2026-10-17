@@ -27,19 +27,22 @@
 
 ## Portal architecture
 
-- `server.py`: aiohttp HTTP/API and one multiplexed WebSocket per browser. Bind loopback locally. PUBLIC_ORIGIN/COOKIE_SECURE configure a future HTTPS entrypoint.
-- `store.py`, `schema.sql`: PostgreSQL 17, transactional bootstrap/invitations, server sessions, ACL snapshots and saved per-user grids. Passwords use salted PBKDF2; upstream credentials use Fernet with a separate runtime key.
+- Top-level boundaries: frontend/, backend/ (Python package), database/, infrastructure/, deployment/, scripts/dev/ and tests/backend/. Keep runtime state in root .runtime/; do not move databases or keys when reorganizing source. backend/paths.py resolves source paths independently of cwd.
+- Launch: sh scripts/dev/start.sh or python -m backend. Native subprocesses use python -m backend.cameras.vesta with cwd set to the repository root; the optional gateway uses python -m backend.cameras.gateway. Keep PWA/public asset URLs unchanged when moving their files.
+
+- `backend/server.py`: aiohttp HTTP/API and one multiplexed WebSocket per browser. Bind loopback locally. PUBLIC_ORIGIN/COOKIE_SECURE configure a future HTTPS entrypoint.
+- `backend/store.py`, `database/schema.sql`: PostgreSQL 17, transactional bootstrap/invitations, server sessions, ACL snapshots and saved per-user grids. Passwords use salted PBKDF2; upstream credentials use Fernet with a separate runtime key.
 - Initial SQL is idempotent; introduce versioned migrations before changing an already deployed schema.
 - Active users/rights/sessions are an in-memory bulk snapshot, refreshed atomically after mutations. This currently requires one portal process; replicas require shared invalidation and source coordination.
-- `streams.py`: one lazy shared producer per unique camera; frames stay in memory. Stop unused producers. Do not duplicate upstream connections per viewer/tile.
-- `vesta.py` owns only the native transport/decoder. Credentials enter worker stdin, never command-line arguments. Native media workers skip redundant catalog queries; catalog discovery is separate.
-- `gateway.py` and `gateway_client.py`: optional token-authenticated media worker. Browser access to the gateway is forbidden. Linux x86_64 can run native workers with CAMERA_SDK_PATH pointing to its separate ELF library and FFMPEG_BINARY=/usr/bin/ffmpeg; macOS keeps Rosetta and dylib. Proprietary binaries stay outside git and are mounted read-only.
-- `app.js`, `style.css`: vanilla UI; wall presets 1/4/6/9/16, custom widths and reordering. Tile picture height follows decoded image aspect ratio; a ResizeObserver measures intrinsic tiles for dense CSS grid row spans. Legacy saved height stays compatible but no longer stretches the picture. Keep captions minimal. Camera chooser supports search/groups; preview shares the existing WebSocket and cached frames. Mobile layout may reduce visible columns without changing the saved layout. Keyboard/touch reordering is available in the tile options dialog.
+- `backend/cameras/streams.py`: one lazy shared producer per unique camera; frames stay in memory. Stop unused producers. Do not duplicate upstream connections per viewer/tile.
+- `backend/cameras/vesta.py` owns only the native transport/decoder. Credentials enter worker stdin, never command-line arguments. Native media workers skip redundant catalog queries; catalog discovery is separate.
+- `backend/cameras/gateway.py` and `backend/cameras/gateway_client.py`: optional token-authenticated media worker. Browser access to the gateway is forbidden. Linux x86_64 can run native workers with CAMERA_SDK_PATH pointing to its separate ELF library and FFMPEG_BINARY=/usr/bin/ffmpeg; macOS keeps Rosetta and dylib. Proprietary binaries stay outside git and are mounted read-only.
+- `frontend/app.js`, `frontend/style.css`: vanilla UI; wall presets 1/4/6/9/16, custom widths and reordering. Tile picture height follows decoded image aspect ratio; a ResizeObserver measures intrinsic tiles for dense CSS grid row spans. Legacy saved height stays compatible but no longer stretches the picture. Keep captions minimal. Camera chooser supports search/groups; preview shares the existing WebSocket and cached frames. Mobile layout may reduce visible columns without changing the saved layout. Keyboard/touch reordering is available in the tile options dialog.
 - Invitation links must be actual clickable anchors. Handle hash navigation in an already open app; ignore late responses from a previous route so they cannot replace the registration form.
 - Admin tab navigation renders immediately and ignores responses for detached tab bodies. Show a retry action for failed loads. Mobile admin tables wrap into cards, coarse-pointer tile controls have larger touch targets. Disconnect tile observers on route/logout; clear fullscreen layout when leaving the session.
 - Manifest/icons/service worker implement PWA. Only public app-shell assets may enter CacheStorage. Phone installation requires trusted HTTPS; desktop localhost works for local preview.
-- `compose.yaml` keeps the local optional gateway setup. `compose.production.yaml` runs native Linux transport, PostgreSQL and nginx with memory/log limits; only nginx publishes 80/443. Encrypted connection data requires the matching /data/secret.key when migrating the DB. Do not expose initial bootstrap publicly before restoring the existing user database.
-- Production TLS: Certbot webroot /var/www/letsencrypt, HTTP challenge in nginx/acme.conf, nginx/production.conf after issuance. scripts/enable-https.sh installs the deploy hook and enables certbot.timer; scripts/renew-certificate.sh validates and reloads nginx after renewal.
+- `infrastructure/compose.yaml` keeps the local optional gateway setup. `deployment/compose.production.yaml` runs native Linux transport, PostgreSQL and nginx with memory/log limits; only nginx publishes 80/443. Encrypted connection data requires the matching /data/secret.key when migrating the DB. Do not expose initial bootstrap publicly before restoring the existing user database.
+- Production TLS: Certbot webroot /var/www/letsencrypt, HTTP challenge in infrastructure/nginx/acme.conf, infrastructure/nginx/production.conf after issuance. deployment/scripts/enable-https.sh installs the deploy hook and enables certbot.timer; deployment/scripts/renew-certificate.sh validates and reloads nginx after renewal.
 - TRUST_PROXY=1 is production-only: app has no published port, nginx overwrites X-Real-IP, and login throttles use that validated client IP. Never enable it with direct untrusted access to app. The local optional gateway compose leaves it off.
 
 ## Existing video transport
@@ -56,16 +59,17 @@
 
 ## Validation
 
-- `.runtime/venv/bin/python -m unittest -v test_protocol.py test_store.py test_api.py test_gateway.py`; PostgreSQL suites require TEST_DATABASE_URL and use disposable schemas.
+- `.runtime/venv/bin/python -m unittest discover -s tests -t . -v`; PostgreSQL suites require TEST_DATABASE_URL and use disposable schemas.
 - Verify authorization, concurrent bootstrap/invite consumption, active stream revocation/blocking and layout persistence against real PostgreSQL.
 - Exercise Chromium desktop/mobile and real streams separately. Artificial image fixtures prove UI/ACL behavior, not real camera availability.
 - For wall changes, verify actual frame proportions (including 4:3 and widescreen), non-overlapping tiles, search, shared preview, width/order, add/remove and persistence. Check 320/390/768/1440 widths, touch controls and delayed admin responses without touching real accounts.
 - Keep CSP enabled during product validation. Playwright waitForFunction uses eval and conflicts with CSP; use locators/polling instead of weakening product policy.
-- `node --check app.js`, `node --check sw.js`, `docker compose config --quiet`.
+- `node --check frontend/app.js`, `node --check frontend/sw.js`, `docker compose -f infrastructure/compose.yaml config --quiet`.
 
 ## Current state
 
 - Local portal implemented with PostgreSQL/PWA; the user has created a real account. Preserve users and layouts during routine development and restarts.
 - User confirmed live video works with VPN disabled. Earlier missing-media diagnostics do not establish a recorder or decoder fault; do not resume connection experiments without a new reason.
 - VPS: Ubuntu x86_64; deploy from a root session. aspyankov has SSH access but no sudo/Docker privilege; do not grant root-equivalent group membership as a deployment shortcut.
+- Source reorganization is local only. The VPS still runs the preceding flat-layout release. Before deploying this layout, reinstall systemd units and certificate deploy hook from deployment/ as documented there; persistent paths, Compose project name and volume names stay unchanged.
 - Production containers built and started; existing user/layout migrated with the matching encryption key and without local sessions. Authenticated API and two real JPEG streams verified on Linux. Domain is newly registered: REG.RU authoritative servers publish A correctly, but .ru delegation was still NXDOMAIN at deployment time. Initial HTTPS timer waits for DNS; certificate issuance and renewal dry-run remain unverified until delegation propagates.

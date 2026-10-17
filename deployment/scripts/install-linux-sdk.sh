@@ -1,7 +1,7 @@
 #!/bin/sh
 # Keep the proprietary transport outside git and the image; verify the pinned binary.
 set -eu
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 [ "$(uname -m)" = x86_64 ] || { echo 'Linux SDK requires x86_64' >&2; exit 1; }
 mkdir -p .runtime
 touch .runtime/p2p-server

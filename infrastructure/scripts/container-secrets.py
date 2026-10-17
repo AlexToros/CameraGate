@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 import secrets
 
-directory = Path(__file__).resolve().parent.parent / '.runtime'
+directory = Path(__file__).resolve().parents[2] / '.runtime'
 directory.mkdir(exist_ok=True,mode=0o700)
 def create_secret(filename):
     try:

@@ -12,9 +12,9 @@ import secrets
 import time
 
 from aiohttp import web, WSMsgType
-from streams import StreamPool, pack_frames
+from .streams import StreamPool, pack_frames
 
-ROOT = Path(__file__).resolve().parent
+from ..paths import ROOT
 
 
 def gateway_app(token, pool=None):

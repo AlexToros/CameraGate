@@ -1,5 +1,6 @@
 import asyncio
-from pathlib import Path
+from contextlib import chdir
+import tempfile
 import time
 from types import SimpleNamespace
 import unittest
@@ -7,9 +8,10 @@ from unittest.mock import patch
 
 from aiohttp import CookieJar, WSMsgType
 from aiohttp.test_utils import TestClient, TestServer
-from server import create_app, COOKIE, Portal
-from store import Problem
-from test_store import DatabaseCase, PASSWORD
+from backend.server import create_app, COOKIE, Portal
+from backend.store import Problem
+from backend.paths import FRONTEND
+from tests.backend.test_store import DatabaseCase, PASSWORD
 
 
 class ProxyThrottleTests(unittest.TestCase):
@@ -41,7 +43,7 @@ class FakeStreams:
     def __init__(self):
         self.config = None
         self.sources = {}
-        self.image = (Path(__file__).parent/'icon-192.png').read_bytes()
+        self.image = (FRONTEND/'icons/icon-192.png').read_bytes()
     def subscribe(self, values):
         for cid in values:
             self.sources.setdefault(cid,SimpleNamespace(jpeg=self.image,frame_id=1,last_frame=time.monotonic(),state='test'))
@@ -86,7 +88,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         return user, {'Cookie':COOKIE+'='+token,'X-CSRF-Token':session['csrf']},session['csrf']
 
     async def test_csrf_roles_private_files_and_write_only_credentials(self):
-        for path in ('/.env','/.runtime/data/secret.key','/store.py'):
+        for path in ('/.env','/.runtime/data/secret.key','/store.py','/backend/store.py','/database/schema.sql','/frontend/README.md'):
             self.assertEqual((await self.client.get(path)).status,404)
         self.assertEqual((await self.client.put('/api/admin/connection',json={},headers={'Origin':'https://evil.example'})).status,403)
         self.assertEqual((await self.client.put('/api/admin/connection',json={})).status,403)
@@ -159,6 +161,15 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         cookie = response.cookies[COOKIE]
         self.assertTrue(cookie['httponly'])
         self.assertEqual(cookie['samesite'],'Strict')
+
+    async def test_frontend_paths_do_not_depend_on_working_directory(self):
+        with tempfile.TemporaryDirectory() as directory, chdir(directory):
+            response = await self.client.get('/')
+            self.assertEqual(response.status, 200)
+            self.assertIn('/app.js', await response.text())
+            response = await self.client.get('/icon-192.png')
+            self.assertEqual(response.status, 200)
+            self.assertTrue((await response.read()).startswith(b'\x89PNG'))
 
 
 if __name__ == '__main__':

@@ -8,10 +8,10 @@ import unittest
 from unittest.mock import patch
 
 from aiohttp.test_utils import TestClient, TestServer
-from gateway import gateway_app
-from gateway_client import RemotePool
-from test_api import FakeStreams
-from streams import StreamPool
+from backend.cameras.gateway import gateway_app
+from backend.cameras.gateway_client import RemotePool
+from tests.backend.test_api import FakeStreams
+from backend.cameras.streams import StreamPool
 
 
 class GatewayTests(unittest.IsolatedAsyncioTestCase):
@@ -53,7 +53,7 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
                 self.cid,self.config = cid,config
                 self.task = asyncio.create_task(asyncio.Event().wait())
         pool = StreamPool({'test':True})
-        with patch('streams.Source',FakeSource) as source:
+        with patch('backend.cameras.streams.Source',FakeSource) as source:
             first = pool.subscribe([1,2,1])
             second = pool.subscribe([2,1])
             self.assertIs(first[1],second[1])

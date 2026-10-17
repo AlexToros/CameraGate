@@ -7,5 +7,5 @@ ConditionPathExists=!/opt/video-viewer/.runtime/https-ready
 [Service]
 Type=oneshot
 ExecStartPre=/usr/bin/python3 -c "import socket; assert '185.22.153.61' in {r[4][0] for r in socket.getaddrinfo('bogdanova34.ru',80,socket.AF_INET)}"
-ExecStart=/bin/sh /opt/video-viewer/scripts/enable-https.sh
+ExecStart=/bin/sh /opt/video-viewer/deployment/scripts/enable-https.sh
 TimeoutStartSec=300

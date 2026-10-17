@@ -7,9 +7,9 @@ if [ ! -s /etc/letsencrypt/live/bogdanova34.ru/fullchain.pem ]; then
     --domain bogdanova34.ru --non-interactive --agree-tos --register-unsafely-without-email
 fi
 # Write in-place: nginx uses a bind mount of this file.
-cat nginx/production.conf > .runtime/nginx.conf
-docker compose -f compose.production.yaml exec -T --interactive=false nginx nginx -t
-docker compose -f compose.production.yaml exec -T --interactive=false nginx nginx -s reload
-install -m 755 scripts/renew-certificate.sh /etc/letsencrypt/renewal-hooks/deploy/video-viewer
+cat infrastructure/nginx/production.conf > .runtime/nginx.conf
+docker compose -f deployment/compose.production.yaml exec -T --interactive=false nginx nginx -t
+docker compose -f deployment/compose.production.yaml exec -T --interactive=false nginx nginx -s reload
+install -m 755 deployment/scripts/renew-certificate.sh /etc/letsencrypt/renewal-hooks/deploy/video-viewer
 systemctl enable --now certbot.timer
 touch .runtime/https-ready

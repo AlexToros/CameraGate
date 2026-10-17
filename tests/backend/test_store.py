@@ -12,7 +12,7 @@ import unittest
 
 import psycopg
 from psycopg.conninfo import make_conninfo
-from store import Store, Problem, password_matches, password_hash
+from backend.store import Store, Problem, password_matches, password_hash
 
 PASSWORD = 'test12'
 
