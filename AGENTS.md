@@ -24,6 +24,7 @@
 - Password minimum is 6 characters, maximum 128, in both forms and backend. Existing users must survive routine restarts.
 - Delete accepted and revoked invitations physically; purge expired/legacy inactive invitations in bulk. Keep only pending invitations in the UI.
 - Keep the wall concise: no wall title, autosave progress/success labels or explanatory grid-fit text. Save silently and show errors when saving fails.
+- Camera chooser lists cameras absent from the current wall first, then cameras already on it, preserving catalog order within each section. Mark existing wall cameras with a green dot labelled «На экране»; this denotes placement, not verified camera connectivity. Apply ordering under search and group filters too.
 
 ## Portal architecture
 

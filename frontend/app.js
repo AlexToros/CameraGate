@@ -179,12 +179,18 @@ function renderTiles() {
 function chooseCamera(tile) {
   dialog("Выбрать камеру",`<div class="camera-filters"><input type="search" id="camera-search" placeholder="Найти камеру" aria-label="Найти камеру" autocomplete="off"><select id="camera-group" aria-label="Группа камер"><option value="0">Все доступные</option>${state.groups.map(g => `<option value="${g.id}" ${me.role === "admin" && g.builtin ? "selected" : ""}>${h(g.name)}</option>`).join("")}</select></div><div class="camera-choices" id="camera-choices"></div>`);
   const groups = new Map(state.groups.map(g => [g.id,new Set(g.camera_ids)]));
+  const onWall = new Set(state.layout.tiles.map(t => t.camera_id).filter(Boolean));
   function filter() {
     const query = modal.querySelector("#camera-search").value.trim().toLocaleLowerCase();
     const gid = +modal.querySelector("#camera-group").value, members = groups.get(gid);
-    const cameras = state.cameras.filter(c => (!gid || members?.has(c.id)) && c.name.toLocaleLowerCase().includes(query));
+    const unused = [], used = [];
+    for(const camera of state.cameras) {
+      if((gid && !members?.has(camera.id)) || !camera.name.toLocaleLowerCase().includes(query)) continue;
+      (onWall.has(camera.id) ? used : unused).push(camera);
+    }
+    const cameras = [...unused,...used];
     const list = modal.querySelector("#camera-choices");
-    list.innerHTML = cameras.map(c => `<button data-camera="${c.id}" class="camera-choice ${c.id === tile.camera_id ? "selected" : ""}" aria-pressed="${c.id === tile.camera_id}"><span>${h(c.name)}</span><span aria-hidden="true">${c.id === tile.camera_id ? "✓" : "+"}</span></button>`).join("") || `<p class="empty">Камеры не найдены</p>`;
+    list.innerHTML = cameras.map(c => `<button data-camera="${c.id}" class="camera-choice ${c.id === tile.camera_id ? "selected" : ""}" aria-pressed="${c.id === tile.camera_id}"${onWall.has(c.id) ? ' aria-label="'+h(c.name)+' — на экране"' : ''}><span>${h(c.name)}</span>${onWall.has(c.id) ? '<span class="camera-on-wall" title="На экране" aria-hidden="true"></span>' : '<span aria-hidden="true">+</span>'}</button>`).join("") || `<p class="empty">Камеры не найдены</p>`;
     list.querySelectorAll("[data-camera]").forEach(button => button.onclick = () => { tile.camera_id = +button.dataset.camera; modal.close(); renderTiles(); changed(); subscribe(); });
   }
   modal.querySelector("#camera-search").oninput = filter;

@@ -80,6 +80,7 @@ a{color:var(--blue)}
 .camera-choice>span:first-child{overflow-wrap:anywhere}
 .camera-choice>span:last-child{padding-left:12px;color:var(--muted)}
 .camera-choice.selected{background:#e4edf4;color:var(--blue)}
+.camera-choice>span.camera-on-wall{width:9px;height:9px;padding:0;margin-left:12px;flex-shrink:0;border-radius:50%;background:#239652}
 .camera-preview{max-width:1200px;width:calc(100% - 24px);padding:16px}
 .camera-preview h2{font-size:16px;line-height:32px;margin:0 40px 10px 0}
 .preview{border:0;border-radius:2px}
