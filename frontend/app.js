@@ -337,5 +337,38 @@ document.addEventListener("fullscreenchange", () => { if(cameraFullscreen && doc
 document.addEventListener("keydown",event=>{if(event.key==="Escape" && cameraFullscreen?.classList.contains("video-expanded")){cameraFullscreen.classList.remove("video-expanded");cameraFullscreen=null;}});
 let resizeTimer;
 window.addEventListener("resize", () => { clearTimeout(resizeTimer);resizeTimer=setTimeout(()=>{const wall=document.querySelector("#wall");if(!me || page!=="wall" || cameraFullscreen?.isConnected || !wall)return;const columns=Math.min(state.layout.columns,Math.max(1,Math.floor((wall.clientWidth-16)/150)));if(columns!==+wall.style.getPropertyValue("--columns"))renderTiles();},150); });
+function installPullToRefresh() {
+  if(!navigator.standalone && !matchMedia("(display-mode: standalone)").matches) return;
+  document.documentElement.classList.add("installed-app");
+  let start=null,distance=0,refreshing=false;
+  const reset=()=>{start=null;distance=0;};
+  document.addEventListener("touchstart",event=>{
+    reset();
+    if(refreshing || event.touches.length!==1 || document.scrollingElement.scrollTop>0 || modal.open || cameraFullscreen || document.fullscreenElement || event.target.closest("button,input,textarea,select,a")) return;
+    // Leave nested scroll areas to their own gestures, even at their top edge.
+    for(let node=event.target;node && node!==document.body;node=node.parentElement) {
+      if(node.scrollHeight>node.clientHeight && /auto|scroll/.test(getComputedStyle(node).overflowY)) return;
+    }
+    start={x:event.touches[0].clientX,y:event.touches[0].clientY};
+  },{passive:true});
+  document.addEventListener("touchmove",event=>{
+    if(!start)return;
+    if(event.touches.length!==1 || document.scrollingElement.scrollTop>0){reset();return;}
+    const dy=event.touches[0].clientY-start.y,dx=Math.abs(event.touches[0].clientX-start.x);
+    if(dy<0 || dx>Math.max(12,dy)){reset();return;}
+    distance=dy;
+    if(dy<12)return;
+    if(!event.cancelable){reset();return;}
+    event.preventDefault();
+  },{passive:false});
+  document.addEventListener("touchend",()=>{
+    const ready=start && distance>=100;
+    reset();
+    if(!ready)return;
+    refreshing=true;flushSave().finally(()=>location.reload());
+  },{passive:true});
+  document.addEventListener("touchcancel",reset,{passive:true});
+}
+installPullToRefresh();
 if("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
 boot();

@@ -89,6 +89,7 @@ a{color:var(--blue)}
 .camera-choice.selected{background:#e4edf4;color:var(--blue)}
 .camera-choice>span.camera-on-wall{width:9px;height:9px;padding:0;margin-left:12px;flex-shrink:0;border-radius:50%;background:#239652}
 .picture:fullscreen{width:100vw;height:100dvh;aspect-ratio:auto;background:#000}
+html.installed-app{overscroll-behavior-y:contain}
 .picture.video-expanded{position:fixed;inset:0;z-index:1000;width:100vw;height:100dvh;aspect-ratio:auto;background:#000}
 .admin{padding:22px 20px;max-width:1200px;margin:auto}
 .admin-nav{display:flex;gap:5px;margin-bottom:22px;border-bottom:1px solid var(--line);padding-bottom:12px}
