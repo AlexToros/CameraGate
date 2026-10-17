@@ -32,10 +32,12 @@ sh deployment/scripts/enable-https.sh
 ```sh
 systemctl list-timers --all certbot.timer video-viewer-https.timer
 journalctl -u video-viewer-https.service --no-pager -n 30
-certbot renew --dry-run
+certbot renew --cert-name bogdanova34-portal --dry-run --run-deploy-hooks
 ```
 
 `--dry-run` нужно выполнять после первоначального выпуска и появления публичного DNS. Ручной ввод DNS TXT для продления не требуется. Используется webroot-режим [Certbot](https://eff-certbot.readthedocs.io/en/stable/using.html#automated-renewals).
+
+Оба домена обслуживают один портал, без перенаправления между доменами. HTTP переходит на HTTPS того же адреса. PUBLIC_ORIGIN задаёт основной origin, ADDITIONAL_PUBLIC_ORIGINS разрешает второй. Cookie привязаны к своему домену, поэтому на каждом адресе нужно входить отдельно; учётная запись и сетка при этом общие.
 
 ## Обновление и диагностика
 
