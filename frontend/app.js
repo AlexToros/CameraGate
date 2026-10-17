@@ -34,7 +34,7 @@ function bindForm(form, submit) {
 function dialog(title, body) { modal.setAttribute("aria-label",title); modal.innerHTML = `<button class="close" aria-label="Закрыть">×</button><h2>${h(title)}</h2>${body}`; modal.querySelector(".close").onclick = () => modal.close(); modal.showModal(); }
 modal.addEventListener("click", event => { if (event.target === modal) { const rect = modal.getBoundingClientRect(); if(event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) modal.close(); } });
 function stopVideo() { clearTimeout(reconnectTimer);socketEpoch++;if(socket)socket.close();socket=null;if(cameraFullscreen){cameraFullscreen.classList.remove("video-expanded");if(document.fullscreenElement===cameraFullscreen)document.exitFullscreen().catch(()=>{});cameraFullscreen=null;}for(const stream of mediaStreams.values())stream.destroy();mediaStreams.clear(); }
-function signedOut(message) { routeEpoch++; tileObserver?.disconnect(); document.body.classList.remove("fullscreen"); me = null; csrf = null; state = null; clearInterval(refreshTimer); clearTimeout(saveTimer); stopVideo(); if(modal.open) modal.close(); authView("login", null, message); }
+function signedOut(message) { routeEpoch++; tileObserver?.disconnect(); me = null; csrf = null; state = null; clearInterval(refreshTimer); clearTimeout(saveTimer); stopVideo(); if(modal.open) modal.close(); authView("login", null, message); }
 function authView(mode, invitation, message = "") {
   const setup = mode === "setup", invite = mode === "invite";
   root.innerHTML = `<main class="auth"><div class="brand-mark" aria-hidden="true">▦</div><h1>${setup ? "Первый администратор" : invite ? "Регистрация" : "Домовые камеры"}</h1><p class="muted">${setup ? "Создайте учётную запись, чтобы настроить доступ к камерам." : invite ? `Здравствуйте, ${h(invitation.last_name)} ${h(invitation.first_name)}!<br>Введите логин, который будете использовать для входа, и задайте пароль.` : "Войдите, чтобы открыть свою видеостену."}</p><form class="stack" id="auth-form">${setup ? `<div class="two"><label>Фамилия<input name="last_name" autocomplete="family-name" required maxlength="100"></label><label>Имя<input name="first_name" autocomplete="given-name" required maxlength="100"></label></div>` : ""}<label>Логин<input name="login" autocomplete="username" autocapitalize="none" spellcheck="false" pattern="[A-Za-z0-9._\\-]{3,64}" minlength="3" maxlength="64" required></label><label>Пароль<input name="password" type="password" autocomplete="${mode === "login" ? "current-password" : "new-password"}" ${mode === "login" ? "" : "minlength=6"} maxlength="128" required></label>${mode !== "login" ? `<label>Повторите пароль<input name="password_confirmation" type="password" autocomplete="new-password" minlength="6" maxlength="128" required></label><small>От 6 символов. Сохраните пароль в менеджере паролей.</small>` : ""}<div class="error" role="alert">${h(message)}</div><button class="primary" type="submit">${setup ? "Создать администратора" : invite ? "Создать учётную запись" : "Войти"}</button></form><div class="install-help">Доступ выдаёт администратор по приглашению. ${showInstallButton() ? `<button id="install" type="button">Установить приложение</button>` : ""}</div></main>`;
@@ -54,7 +54,7 @@ async function install() {
 }
 async function boot() {
   const epoch = ++routeEpoch;
-  tileObserver?.disconnect(); document.body.classList.remove("fullscreen");
+  tileObserver?.disconnect();
   stopVideo(); clearInterval(refreshTimer); clearTimeout(saveTimer);
   me = null; csrf = null; state = null;
   if(modal.open) modal.close();
@@ -109,7 +109,7 @@ const icon = name => `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidde
 const screenCount = n => `${n} ${n === 1 ? "экран" : n < 5 ? "экрана" : "экранов"}`;
 function wall() {
   const content = document.querySelector("#content");
-  content.innerHTML = `<div class="toolbar"><div class="row"><button id="preset">${icon("grid")}<span>Сетка</span></button><button id="add-tile">${icon("plus")}<span>Экран</span></button><button id="start-playback" hidden>Начать просмотр</button></div><button id="fullscreen" class="icon-button" title="Во весь экран" aria-label="Во весь экран">${icon("expand")}</button></div>${!state.configured ? `<div class="banner">Подключение к камерам не настроено. ${me.role === "admin" ? "Введите параметры в разделе «Управление → Подключение»." : "Обратитесь к администратору."}</div>` : !state.cameras.length ? `<div class="banner">${me.role === "admin" ? h(state.connection_state) : "Доступных камер пока нет. Обратитесь к администратору."}</div>` : ""}<div class="wall" id="wall" aria-label="Камеры"></div><button class="exit-fullscreen" aria-label="Выйти из полноэкранного режима">Закрыть</button>`;
+  content.innerHTML = `<div class="toolbar"><div class="row"><button id="preset">${icon("grid")}<span>Сетка</span></button><button id="add-tile">${icon("plus")}<span>Экран</span></button><button id="start-playback" hidden>Начать просмотр</button></div></div>${!state.configured ? `<div class="banner">Подключение к камерам не настроено. ${me.role === "admin" ? "Введите параметры в разделе «Управление → Подключение»." : "Обратитесь к администратору."}</div>` : !state.cameras.length ? `<div class="banner">${me.role === "admin" ? h(state.connection_state) : "Доступных камер пока нет. Обратитесь к администратору."}</div>` : ""}<div class="wall" id="wall" aria-label="Камеры"></div>`;
   document.querySelector("#add-tile").onclick = () => {
     if(state.layout.tiles.length >= 64) return toast("Можно добавить до 64 экранов");
     const tile = {id:uid(),camera_id:null,width:1,height:1};
@@ -117,8 +117,6 @@ function wall() {
   };
   document.querySelector("#preset").onclick = gridOptions;
   document.querySelector("#start-playback").onclick=resumeCameraPlayback;
-  document.querySelector("#fullscreen").onclick = async () => { document.body.classList.add("fullscreen"); try { await document.documentElement.requestFullscreen(); } catch {} };
-  document.querySelector(".exit-fullscreen").onclick = () => { document.body.classList.remove("fullscreen"); if(document.fullscreenElement) document.exitFullscreen(); };
   renderTiles(); connectVideo();
 }
 function preferredCameras() {
@@ -335,7 +333,7 @@ window.addEventListener("offline", () => { toast("Нет сети. Эфир во
 window.addEventListener("online", () => { if(me) { refresh(); connectVideo(); } else boot(); });
 window.addEventListener("camera-playback-policy",event=>{const button=document.querySelector("#start-playback");if(button)button.hidden=!event.detail.blocked;});
 document.addEventListener("visibilitychange", () => { if(document.hidden) { flushSave(); stopVideo(); } else if(me && page === "wall") { refresh(); connectVideo(); } });
-document.addEventListener("fullscreenchange", () => { if(cameraFullscreen && document.fullscreenElement!==cameraFullscreen && !cameraFullscreen.classList.contains("video-expanded"))cameraFullscreen=null;if(!document.fullscreenElement)document.body.classList.remove("fullscreen"); });
+document.addEventListener("fullscreenchange", () => { if(cameraFullscreen && document.fullscreenElement!==cameraFullscreen && !cameraFullscreen.classList.contains("video-expanded"))cameraFullscreen=null; });
 document.addEventListener("keydown",event=>{if(event.key==="Escape" && cameraFullscreen?.classList.contains("video-expanded")){cameraFullscreen.classList.remove("video-expanded");cameraFullscreen=null;}});
 let resizeTimer;
 window.addEventListener("resize", () => { clearTimeout(resizeTimer);resizeTimer=setTimeout(()=>{const wall=document.querySelector("#wall");if(!me || page!=="wall" || cameraFullscreen?.isConnected || !wall)return;const columns=Math.min(state.layout.columns,Math.max(1,Math.floor((wall.clientWidth-16)/150)));if(columns!==+wall.style.getPropertyValue("--columns"))renderTiles();},150); });
