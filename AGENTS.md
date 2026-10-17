@@ -34,7 +34,7 @@
 - `streams.py`: one lazy shared producer per unique camera; frames stay in memory. Stop unused producers. Do not duplicate upstream connections per viewer/tile.
 - `vesta.py` owns only the native transport/decoder. Credentials enter worker stdin, never command-line arguments. Native media workers skip redundant catalog queries; catalog discovery is separate.
 - `gateway.py` and `gateway_client.py`: optional token-authenticated media worker for a Linux portal container. Browser access to the gateway is forbidden. Full Linux camera transport remains a separate prerequisite; macOS dylib is not portable.
-- `app.js`, `style.css`: vanilla UI, wall presets/custom sizes/reordering, administration. Mobile layout may reduce visible columns without changing the saved layout. Keyboard/touch reordering is available in the tile-size dialog.
+- `app.js`, `style.css`: vanilla UI; wall presets 1/4/6/9/16, custom widths and reordering. Tile picture height follows decoded image aspect ratio; a ResizeObserver measures intrinsic tiles for dense CSS grid row spans. Legacy saved height stays compatible but no longer stretches the picture. Keep captions minimal. Camera chooser supports search/groups; preview shares the existing WebSocket and cached frames. Mobile layout may reduce visible columns without changing the saved layout. Keyboard/touch reordering is available in the tile options dialog.
 - Invitation links must be actual clickable anchors. Handle hash navigation in an already open app; ignore late responses from a previous route so they cannot replace the registration form.
 - Manifest/icons/service worker implement PWA. Only public app-shell assets may enter CacheStorage. Phone installation requires trusted HTTPS; desktop localhost works for local preview.
 - `compose.yaml`: PostgreSQL, portal and nginx, persistent DB/key volumes, file secrets. Only nginx publishes a loopback port. No VPS deployment is authorized.
@@ -61,6 +61,7 @@
 
 ## Current state
 
-- Local portal implemented with PostgreSQL/PWA; first real administrator is deliberately left for the user to create.
+- Local portal implemented with PostgreSQL/PWA; the user has created a real account. Preserve users and layouts during routine development and restarts.
+- User confirmed live video works with VPN disabled. Earlier missing-media diagnostics do not establish a recorder or decoder fault; do not resume connection experiments without a new reason.
 - Docker configuration is prepared; Docker daemon was stopped during development, so container build/run is not yet verified.
 - The VPS was cleared of GRACE in earlier work and is not part of this implementation.

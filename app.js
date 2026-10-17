@@ -3,6 +3,8 @@ const root = document.querySelector("#app"), modal = document.querySelector("#mo
 const h = value => String(value ?? "").replace(/[&<>"\x27]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","\x27":"&#39;"}[c]));
 let me, csrf, state, page = "wall", adminTab = "users", socket, socketEpoch = 0, saveTimer, saving = Promise.resolve(), refreshTimer, installPrompt, reconnectTimer;
 const images = new Map();
+const cameraRatios = new Map();
+let tileObserver, previewCameraId = null;
 let dragged;
 let routeEpoch = 0;
 const roleName = role => role === "admin" ? "Администратор" : "Пользователь";
@@ -29,8 +31,9 @@ function bindForm(form, submit) {
     try { await submit(fields(form)); } catch (e) { if (error) error.textContent = e.message; else toast(e.message); } finally { button.disabled = false; }
   });
 }
-function dialog(title, body) { modal.innerHTML = `<button class="close" aria-label="Закрыть">×</button><h2>${h(title)}</h2>${body}`; modal.querySelector(".close").onclick = () => modal.close(); modal.showModal(); }
+function dialog(title, body) { previewCameraId = null; modal.classList.remove("camera-preview"); modal.setAttribute("aria-label",title); modal.innerHTML = `<button class="close" aria-label="Закрыть">×</button><h2>${h(title)}</h2>${body}`; modal.querySelector(".close").onclick = () => modal.close(); modal.showModal(); }
 modal.addEventListener("click", event => { if (event.target === modal) { const rect = modal.getBoundingClientRect(); if(event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) modal.close(); } });
+modal.addEventListener("close", () => { previewCameraId = null; modal.classList.remove("camera-preview"); });
 function stopVideo() { clearTimeout(reconnectTimer); socketEpoch++; if(socket) socket.close(); socket = null; for(const image of images.values()) URL.revokeObjectURL(image.url); images.clear(); }
 function signedOut(message) { me = null; csrf = null; state = null; clearInterval(refreshTimer); clearTimeout(saveTimer); stopVideo(); if(modal.open) modal.close(); authView("login", null, message); }
 function authView(mode, invitation, message = "") {
@@ -83,6 +86,7 @@ async function refresh() {
   } catch(e) { if(e.status !== 401) toast(navigator.onLine ? e.message : "Нет подключения к сети"); }
 }
 function render() {
+  tileObserver?.disconnect();
   if(!me || !state) return;
   stopVideo();
   root.innerHTML = `<header class="header"><div class="brand"><span class="symbol" aria-hidden="true">▦</span><div><strong>Домовые камеры</strong><div class="identity">${h(me.first_name)} ${h(me.last_name)}</div></div></div><div class="row"><nav class="tabs" aria-label="Разделы"><button data-page="wall" class="${page === "wall" ? "active" : ""}">Прямой эфир</button>${me.role === "admin" ? `<button data-page="admin" class="${page === "admin" ? "active" : ""}">Управление</button>` : ""}</nav><button id="logout">Выйти</button></div></header><main id="content"></main>`;
@@ -90,44 +94,103 @@ function render() {
   document.querySelector("#logout").onclick = async () => { try { await flushSave(); await api("/api/auth/logout","POST",{}); signedOut(); } catch(e) { toast(e.message); } };
   if(page === "wall") wall(); else admin();
 }
+const icons = {
+  more: '<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>',
+  expand: '<path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/>',
+  grid: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+  down: '<path d="m8 10 4 4 4-4"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>'
+};
+const icon = name => `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${icons[name]}</svg>`;
+const screenCount = n => `${n} ${n === 1 ? "экран" : n < 5 ? "экрана" : "экранов"}`;
 function wall() {
   const content = document.querySelector("#content");
-  content.innerHTML = `<div class="toolbar"><div class="row"><label>Колонки<select id="columns" aria-label="Количество колонок">${Array.from({length:12},(_,i) => `<option ${state.layout.columns === i+1 ? "selected" : ""}>${i+1}</option>`).join("")}</select></label><button id="preset">Сетка</button><button id="add-tile" class="primary">+ Экран</button><button id="fullscreen" class="screen-only">Во весь экран</button></div></div>${!state.configured ? `<div class="banner">Подключение к камерам пока не настроено. ${me.role === "admin" ? "Откройте «Управление → Подключение» и введите ID, UserName и Password." : "Обратитесь к администратору."}</div>` : !state.cameras.length ? `<div class="banner">Вам пока не назначены камеры. ${me.role === "admin" ? h(state.connection_state) : "Обратитесь к администратору."}</div>` : ""}<div class="wall" id="wall"></div><button class="exit-fullscreen">Вернуться</button>`;
-  document.querySelector("#columns").onchange = e => { state.layout.columns = +e.target.value; renderTiles(); changed(); };
-  document.querySelector("#add-tile").onclick = () => { if(state.layout.tiles.length>=64) return toast("Можно добавить до 64 экранов"); state.layout.tiles.push({id:uid(),camera_id:null,width:1,height:1}); renderTiles(); changed(); };
-  document.querySelector("#preset").onclick = () => {
-    dialog("Быстрая сетка",`<p class="muted">Заменить текущую сетку. Камеры расставятся по порядку.</p><div class="row">${[1,4,9,16].map(n => `<button data-preset="${n}">${n} ${n === 1 ? "экран" : "экранов"}</button>`).join("")}</div>`);
-    modal.querySelectorAll("[data-preset]").forEach(button => button.onclick = () => { const count = +button.dataset.preset; state.layout = {columns:Math.sqrt(count),tiles:Array.from({length:count},(_,i) => ({id:uid(),camera_id:state.cameras[i]?.id ?? null,width:1,height:1}))}; modal.close(); wall(); changed(); });
+  content.innerHTML = `<div class="toolbar"><div class="row"><button id="preset">${icon("grid")}<span>Сетка</span></button><button id="add-tile">${icon("plus")}<span>Экран</span></button></div><button id="fullscreen" class="icon-button" title="Во весь экран" aria-label="Во весь экран">${icon("expand")}</button></div>${!state.configured ? `<div class="banner">Подключение к камерам не настроено. ${me.role === "admin" ? "Введите параметры в разделе «Управление → Подключение»." : "Обратитесь к администратору."}</div>` : !state.cameras.length ? `<div class="banner">${me.role === "admin" ? h(state.connection_state) : "Доступных камер пока нет. Обратитесь к администратору."}</div>` : ""}<div class="wall" id="wall" aria-label="Камеры"></div><button class="exit-fullscreen" aria-label="Выйти из полноэкранного режима">Закрыть</button>`;
+  document.querySelector("#add-tile").onclick = () => {
+    if(state.layout.tiles.length >= 64) return toast("Можно добавить до 64 экранов");
+    const tile = {id:uid(),camera_id:null,width:1,height:1};
+    state.layout.tiles.push(tile); renderTiles(); changed(); chooseCamera(tile);
   };
+  document.querySelector("#preset").onclick = gridOptions;
   document.querySelector("#fullscreen").onclick = async () => { document.body.classList.add("fullscreen"); try { await document.documentElement.requestFullscreen(); } catch {} };
   document.querySelector(".exit-fullscreen").onclick = () => { document.body.classList.remove("fullscreen"); if(document.fullscreenElement) document.exitFullscreen(); };
   renderTiles(); connectVideo();
 }
+function applyPreset(count) {
+  const existing = state.layout.tiles;
+  const selected = new Set(existing.map(t => t.camera_id).filter(Boolean));
+  const available = state.cameras.filter(c => !selected.has(c.id));
+  let cursor = 0;
+  state.layout = {columns:count === 6 ? 3 : Math.sqrt(count),tiles:Array.from({length:count},(_,i) => ({id:existing[i]?.id || uid(),camera_id:existing[i]?.camera_id ?? available[cursor++]?.id ?? null,width:1,height:1}))};
+  modal.close(); renderTiles(); changed(); subscribe();
+}
+function gridOptions() {
+  dialog("Сетка",`<div class="presets">${[1,4,6,9,16].map(n => `<button data-preset="${n}" aria-label="${screenCount(n)}"><span class="preset-icon preset-${n}" aria-hidden="true">${Array.from({length:n},() => "<i></i>").join("")}</span><span>${n}</span></button>`).join("")}</div><form class="stack"><label>Колонки<select name="columns">${Array.from({length:12},(_,i) => `<option ${state.layout.columns === i+1 ? "selected" : ""}>${i+1}</option>`).join("")}</select></label><div class="error"></div><div class="actions"><button type="submit" class="primary">Применить</button></div></form>`);
+  modal.querySelectorAll("[data-preset]").forEach(button => button.onclick = () => applyPreset(+button.dataset.preset));
+  bindForm(modal.querySelector("form"),data => { state.layout.columns = +data.columns; modal.close(); renderTiles(); changed(); });
+}
 function renderTiles() {
   const wall = document.querySelector("#wall"); if(!wall) return;
-  const columns = innerWidth <= 760 ? Math.min(state.layout.columns,Math.max(1,Math.floor((innerWidth-24)/145))) : state.layout.columns;
+  tileObserver?.disconnect();
+  const columns = Math.min(state.layout.columns,Math.max(1,Math.floor((wall.clientWidth-16)/150)));
   wall.style.setProperty("--columns",columns);
-  wall.innerHTML = state.layout.tiles.length ? state.layout.tiles.map((tile,index) => `<article class="tile" data-tile="${h(tile.id)}"><div class="tile-head"><span class="grip" draggable="true" title="Перетащить экран">⠿</span><select aria-label="Камера экрана ${index+1}"><option value="">Выбрать камеру</option>${state.cameras.map(c => `<option value="${c.id}" ${tile.camera_id === c.id ? "selected" : ""}>${h(c.name)}</option>`).join("")}</select><button data-size title="Размер и положение экрана" aria-label="Размер и положение экрана ${index+1}">⤢</button><button data-remove title="Удалить экран" aria-label="Удалить экран ${index+1}">×</button></div><div class="picture"><img alt="" hidden><span class="stream-state">${tile.camera_id ? "Подключение…" : "Выберите камеру для этого экрана"}</span><span class="live-label">Прямой эфир</span></div></article>`).join("") : `<div class="empty">Добавьте экран или выберите быструю сетку.</div>`;
+  const cameras = new Map(state.cameras.map(c => [c.id,c]));
+  wall.innerHTML = state.layout.tiles.length ? state.layout.tiles.map((tile,index) => {
+    const name = cameras.get(tile.camera_id)?.name || "Выбрать камеру";
+    return `<article class="tile" data-tile="${h(tile.id)}" aria-label="Экран ${index+1}"><div class="tile-head" draggable="true"><span class="status-dot" aria-hidden="true"></span><button class="camera-trigger" aria-label="Камера экрана ${index+1}: ${h(name)}" title="${h(name)}">${h(name)}${icon("down")}</button><button class="tile-menu icon-button" title="Настройки экрана" aria-label="Настройки экрана ${index+1}">${icon("more")}</button></div><div class="picture"><img alt="" hidden><span class="stream-state">${tile.camera_id ? "Подключение…" : "Выбрать камеру"}</span><button class="tile-expand icon-button" title="Увеличить" aria-label="Увеличить экран ${index+1}">${icon("expand")}</button></div></article>`;
+  }).join("") : `<div class="empty"><p>Добавьте экран или выберите сетку.</p><button class="primary" id="empty-add">Добавить экран</button></div>`;
+  if(!state.layout.tiles.length) { document.querySelector("#empty-add").onclick = () => document.querySelector("#add-tile").click(); return; }
   const tilesById = new Map(state.layout.tiles.map(t => [t.id,t]));
+  tileObserver = new ResizeObserver(entries => {
+    // ResizeObserver provides the measurements; no forced read/write layout loop.
+    const gap = parseFloat(getComputedStyle(wall).rowGap) || 4;
+    const spans = entries.map(entry => ({element:entry.target,rows:Math.ceil(((entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height)+gap)/(2+gap))}));
+    spans.forEach(({element,rows}) => element.style.gridRowEnd = `span ${rows}`);
+  });
   wall.querySelectorAll(".tile").forEach(element => {
     const tile = tilesById.get(element.dataset.tile);
-    element.style.setProperty("--width",Math.min(tile.width,columns)); element.style.setProperty("--height",tile.height);
-    element.querySelector("select").onchange = event => { tile.camera_id = +event.target.value || null; clearTile(element); changed(); subscribe(); drawCached(tile,element); };
-    element.querySelector("[data-remove]").onclick = () => { state.layout.tiles = state.layout.tiles.filter(t => t.id !== tile.id); renderTiles(); changed(); subscribe(); };
-    element.querySelector("[data-size]").onclick = () => tileOptions(tile);
-    element.querySelector(".grip").ondragstart = event => { dragged = tile.id; event.dataTransfer.setData("text/plain",tile.id); element.classList.add("dragging"); };
-    element.ondragend = () => { dragged = null; wall.querySelectorAll(".tile").forEach(t => t.classList.remove("dragging","drop")); };
+    element.style.setProperty("--width",Math.min(tile.width,columns));
+    element.style.setProperty("--ratio",cameraRatios.get(tile.camera_id) || 16/9);
+    element.querySelector(".camera-trigger").onclick = () => { if(!dragged) chooseCamera(tile); };
+    element.querySelector(".tile-menu").onclick = () => tileOptions(tile);
+    element.querySelector(".tile-expand").onclick = () => tile.camera_id ? previewCamera(tile) : chooseCamera(tile);
+    element.querySelector(".picture").ondblclick = () => { if(tile.camera_id) previewCamera(tile); };
+    const header = element.querySelector(".tile-head");
+    header.ondragstart = event => { dragged = tile.id; event.dataTransfer.setData("text/plain",tile.id); element.classList.add("dragging"); };
+    header.ondragend = () => { dragged = null; wall.querySelectorAll(".tile").forEach(t => t.classList.remove("dragging","drop")); };
     element.ondragover = event => { if(dragged && dragged !== tile.id) { event.preventDefault(); element.classList.add("drop"); } };
     element.ondragleave = () => element.classList.remove("drop");
-    element.ondrop = event => { event.preventDefault(); const from = state.layout.tiles.findIndex(t => t.id === dragged), to = state.layout.tiles.findIndex(t => t.id === tile.id); if(from>=0 && to>=0) { state.layout.tiles.splice(to,0,state.layout.tiles.splice(from,1)[0]); renderTiles(); changed(); } };
+    element.ondrop = event => { event.preventDefault(); const from = state.layout.tiles.findIndex(t => t.id === dragged), to = state.layout.tiles.findIndex(t => t.id === tile.id); if(from>=0 && to>=0) { state.layout.tiles.splice(to,0,state.layout.tiles.splice(from,1)[0]); dragged = null; renderTiles(); changed(); } };
+    tileObserver.observe(element);
     drawCached(tile,element);
   });
 }
+function chooseCamera(tile) {
+  dialog("Выбрать камеру",`<div class="camera-filters"><input type="search" id="camera-search" placeholder="Найти камеру" aria-label="Найти камеру" autocomplete="off"><select id="camera-group" aria-label="Группа камер"><option value="0">Все доступные</option>${state.groups.filter(g => !g.builtin).map(g => `<option value="${g.id}">${h(g.name)}</option>`).join("")}</select></div><div class="camera-choices" id="camera-choices"></div>`);
+  const groups = new Map(state.groups.map(g => [g.id,new Set(g.camera_ids)]));
+  function filter() {
+    const query = modal.querySelector("#camera-search").value.trim().toLocaleLowerCase();
+    const gid = +modal.querySelector("#camera-group").value, members = groups.get(gid);
+    const cameras = state.cameras.filter(c => (!gid || members?.has(c.id)) && c.name.toLocaleLowerCase().includes(query));
+    const list = modal.querySelector("#camera-choices");
+    list.innerHTML = cameras.map(c => `<button data-camera="${c.id}" class="camera-choice ${c.id === tile.camera_id ? "selected" : ""}" aria-pressed="${c.id === tile.camera_id}"><span>${h(c.name)}</span><span aria-hidden="true">${c.id === tile.camera_id ? "✓" : "+"}</span></button>`).join("") || `<p class="empty">Камеры не найдены</p>`;
+    list.querySelectorAll("[data-camera]").forEach(button => button.onclick = () => { tile.camera_id = +button.dataset.camera; modal.close(); renderTiles(); changed(); subscribe(); });
+  }
+  modal.querySelector("#camera-search").oninput = filter;
+  modal.querySelector("#camera-group").onchange = filter;
+  filter();
+}
 function tileOptions(tile) {
   const position = state.layout.tiles.indexOf(tile)+1;
-  dialog("Размер и положение",`<form class="stack"><div class="two"><label>Ширина, колонок<select name="width">${Array.from({length:12},(_,i) => `<option ${tile.width === i+1 ? "selected" : ""}>${i+1}</option>`).join("")}</select></label><label>Высота, строк<select name="height">${Array.from({length:6},(_,i) => `<option ${tile.height === i+1 ? "selected" : ""}>${i+1}</option>`).join("")}</select></label></div><label>Позиция на стене<select name="position">${state.layout.tiles.map((_,i) => `<option ${position === i+1 ? "selected" : ""}>${i+1}</option>`).join("")}</select></label><p class="muted">На узком экране ширина ограничивается числом колонок.</p><div class="error"></div><div class="actions"><button type="button" id="remove-current-tile" class="danger">Удалить экран</button><button type="submit" class="primary">Применить</button></div></form>`);
+  dialog("Экран",`<form class="stack"><div class="two"><label>Ширина, колонок<select name="width">${Array.from({length:12},(_,i) => `<option ${tile.width === i+1 ? "selected" : ""}>${i+1}</option>`).join("")}</select></label><label>Позиция<select name="position">${state.layout.tiles.map((_,i) => `<option ${position === i+1 ? "selected" : ""}>${i+1}</option>`).join("")}</select></label></div><div class="error"></div><div class="actions"><button type="button" id="remove-current-tile" class="danger">Удалить экран</button><button type="submit" class="primary">Применить</button></div></form>`);
   modal.querySelector("#remove-current-tile").onclick = () => { state.layout.tiles = state.layout.tiles.filter(t => t.id !== tile.id); modal.close(); renderTiles(); changed(); subscribe(); };
-  bindForm(modal.querySelector("form"), data => { tile.width = +data.width; tile.height = +data.height; const index = state.layout.tiles.indexOf(tile); state.layout.tiles.splice(index,1); state.layout.tiles.splice(+data.position-1,0,tile); modal.close(); renderTiles(); changed(); });
+  bindForm(modal.querySelector("form"), data => { tile.width = +data.width; tile.height = 1; const index = state.layout.tiles.indexOf(tile); state.layout.tiles.splice(index,1); state.layout.tiles.splice(+data.position-1,0,tile); modal.close(); renderTiles(); changed(); });
+}
+function previewCamera(tile) {
+  const camera = state.cameras.find(c => c.id === tile.camera_id); if(!camera) return;
+  dialog(camera.name,`<div class="preview tile"><div class="picture"><img alt="" hidden><span class="stream-state">Подключение…</span></div></div>`);
+  modal.classList.add("camera-preview"); previewCameraId = tile.camera_id;
+  drawCached({camera_id:previewCameraId},modal.querySelector(".preview"));
 }
 function changed() { clearTimeout(saveTimer); saveTimer = setTimeout(save,500); }
 function save() {
@@ -142,7 +205,7 @@ function drawCached(tile, element) {
   const cached = images.get(tile.camera_id);
   if(!cached || Date.now()-cached.at>5000) return;
   const image = element.querySelector("img"), expectedCamera = tile.camera_id, expectedURL = cached.url;
-  image.onload = () => { if(tile.camera_id === expectedCamera && image.src === expectedURL && element.isConnected && element.querySelector("img") === image) { image.hidden = false; element.classList.add("live"); } };
+  image.onload = () => { if(tile.camera_id === expectedCamera && image.src === expectedURL && element.isConnected && element.querySelector("img") === image) { cameraRatios.set(expectedCamera,image.naturalWidth/image.naturalHeight); element.style.setProperty("--ratio",image.naturalWidth/image.naturalHeight); image.hidden = false; element.classList.add("live"); } };
   image.src = expectedURL;
 }
 function subscriptions() { return [...new Set(state.layout.tiles.map(t => t.camera_id).filter(Boolean))]; }
@@ -159,17 +222,19 @@ function connectVideo() {
     if(epoch !== socketEpoch || !state) return;
     if(typeof event.data === "string") {
       const message = JSON.parse(event.data);
-      if(message.type === "revoked") { const denied = new Set(message.camera_ids); for(const tile of state.layout.tiles) if(denied.has(tile.camera_id)) tile.camera_id = null; renderTiles(); subscribe(); refresh(); toast("Права доступа к камерам изменились"); }
+      if(message.type === "revoked") { const denied = new Set(message.camera_ids); for(const tile of state.layout.tiles) if(denied.has(tile.camera_id)) tile.camera_id = null; if(denied.has(previewCameraId)) modal.close(); renderTiles(); subscribe(); refresh(); toast("Права доступа к камерам изменились"); }
       if(message.type === "status") {
         const tiles = new Map(state.layout.tiles.map(t => [t.id,t]));
         document.querySelectorAll(".tile").forEach(element => { const cid = tiles.get(element.dataset.tile)?.camera_id, status = message.cameras[cid]; if(status && status !== "Прямой эфир") { clearTile(element); element.querySelector(".stream-state").textContent = status; } });
       }
+      if(message.type === "status" && previewCameraId && message.cameras[previewCameraId] && message.cameras[previewCameraId] !== "Прямой эфир") { const preview = modal.querySelector(".preview"); if(preview) { clearTile(preview); preview.querySelector(".stream-state").textContent = message.cameras[previewCameraId]; } }
       return;
     }
     const view = new DataView(event.data), active = new Set(subscriptions()), tiles = new Map(state.layout.tiles.map(t => [t.id,t])), incoming = new Map();
     let offset = 0;
     while(offset+8<=view.byteLength) { const cid = view.getUint32(offset), length = view.getUint32(offset+4); offset += 8; if(length>8*1024*1024 || offset+length>view.byteLength) break; if(active.has(cid)) { const old = images.get(cid); const value = {url:URL.createObjectURL(new Blob([event.data.slice(offset,offset+length)],{type:"image/jpeg"})),at:Date.now()}; images.set(cid,value); incoming.set(cid,value); if(old) setTimeout(() => URL.revokeObjectURL(old.url),1500); } offset += length; }
     document.querySelectorAll(".tile").forEach(element => { const tile = tiles.get(element.dataset.tile); if(incoming.has(tile?.camera_id)) drawCached(tile,element); });
+    if(previewCameraId && incoming.has(previewCameraId)) { const preview = modal.querySelector(".preview"); if(preview) drawCached({camera_id:previewCameraId},preview); }
   };
   ws.onclose = event => { if(epoch !== socketEpoch) return; document.querySelectorAll(".tile").forEach(clearTile); if(event.code === 4401) signedOut("Сессия завершена. Войдите снова"); else if(event.code === 4403) { toast("Права доступа изменились"); refresh().then(() => { reconnectTimer = setTimeout(connectVideo,1500); }); } else reconnectTimer = setTimeout(connectVideo,2000); };
 }
