@@ -4,7 +4,7 @@ import threading
 import unittest
 from unittest.mock import Mock, patch
 
-from server import Frames, HEADER, Viewer, IsolatedViewer, Transport, frame_health, RequestTimeout
+from vesta import Frames, HEADER, Viewer, IsolatedViewer, Transport, frame_health, RequestTimeout
 
 
 def keyframe(data, codec=3):
@@ -115,10 +115,10 @@ class RecoveryTests(unittest.TestCase):
             return (255, 0, 1, 0, 0, 0, 1412, len(audio)), audio
 
         transport.receive.side_effect = receive
-        with patch('server.credentials', return_value={'SERIAL_NUM': 'placeholder'}), \
-             patch('server.discover', return_value='127.0.0.1'), \
-             patch('server.Transport', return_value=transport), \
-             patch('server.time.monotonic', side_effect=lambda: clock[0]):
+        with patch('vesta.credentials', return_value={'SERIAL_NUM': 'placeholder'}), \
+             patch('vesta.discover', return_value='127.0.0.1'), \
+             patch('vesta.Transport', return_value=transport), \
+             patch('vesta.time.monotonic', side_effect=lambda: clock[0]):
             viewer = Viewer()
             viewer.run()
         self.assertEqual(viewer.failure, 'decoded_frames_timeout')
@@ -134,7 +134,7 @@ class RecoveryTests(unittest.TestCase):
         viewer.child.poll.return_value = None
         viewer.stop = Mock()
         viewer.stop.wait.side_effect = [False, False, True]
-        with patch('server.time.monotonic', side_effect=[10, 13]):
+        with patch('vesta.time.monotonic', side_effect=[10, 13]):
             viewer.supervise()
         viewer.child.terminate.assert_called_once()
         viewer.child.kill.assert_called_once()

@@ -303,7 +303,8 @@ class Frames:
 
 
 class Viewer:
-    def __init__(self):
+    def __init__(self, config=None):
+        self.config = config
         self.condition = threading.Condition()
         self.stop = threading.Event()
         self.wakeup = threading.Event()
@@ -469,7 +470,7 @@ class Viewer:
         return info
 
     def run(self):
-        config = credentials()
+        config = self.config or credentials()
         while not self.stop.is_set():
             transport = None
             try:
@@ -560,8 +561,8 @@ class Viewer:
 
 class IsolatedViewer(Viewer):
     """The legacy vendor transport lives in a disposable Rosetta process."""
-    def __init__(self):
-        super().__init__()
+    def __init__(self, config=None):
+        super().__init__(config)
         self.child = None
         self.remote_diagnostics = {}
         self.child_started = 0
@@ -661,11 +662,11 @@ class IsolatedViewer(Viewer):
             self.last_frame = 0
             self.termination = None
             self.child = subprocess.Popen([
-                '/usr/bin/arch', '-x86_64', '/usr/bin/python3', str(ROOT / 'server.py'),
+                '/usr/bin/arch', '-x86_64', '/usr/bin/python3', str(ROOT / 'vesta.py'),
                 '--worker', str(channel), str(generation)], stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
             # Covers a selection arriving while Popen was starting.
-            self.child.stdin.write((json.dumps({'channel': self.selected, 'generation': self.generation}) + '\n').encode())
+            self.child.stdin.write((json.dumps({'channel': self.selected, 'generation': self.generation, 'config': self.config}) + '\n').encode())
             self.child.stdin.flush()
             diagnostic('worker_started', channel=channel)
             signature = None
@@ -703,9 +704,6 @@ class IsolatedViewer(Viewer):
                 self.wakeup.wait(1)
 
 
-VIEWER = IsolatedViewer()
-
-
 def worker_main():
     global OUT
     pipe = os.fdopen(os.dup(1), 'wb', buffering=65536)
@@ -714,7 +712,8 @@ def worker_main():
     os.dup2(null, 1)
     os.dup2(null, 2)
     os.close(null)
-    viewer = Viewer()
+    initial = json.loads(sys.stdin.buffer.readline(16384))
+    viewer = Viewer(initial.get('config'))
     viewer.selected = int(sys.argv[2])
     viewer.generation = int(sys.argv[3])
     def stop(*_):
@@ -785,134 +784,30 @@ def worker_main():
         os._exit(0)
 
 
-class Handler(BaseHTTPRequestHandler):
-    protocol_version = 'HTTP/1.1'
-
-    def log_message(self, *args):
-        pass
-
-    def respond(self, code, body, content_type):
-        self.send_response(code)
-        self.send_header('Content-Type', content_type)
-        self.send_header('Content-Length', str(len(body)))
-        self.send_header('Cache-Control', 'no-store')
-        self.send_header('X-Content-Type-Options', 'nosniff')
-        self.send_header('Content-Security-Policy', "default-src 'self'; img-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'")
-        self.end_headers()
-        self.wfile.write(body)
-
-    def allowed_host(self):
-        return self.headers.get('Host') in ('127.0.0.1:%d' % PORT, 'localhost:%d' % PORT)
-
-    def do_GET(self):
-        if not self.allowed_host():
-            self.respond(403, b'Forbidden', 'text/plain')
-            return
-        files = {'/': ('index.html', 'text/html; charset=utf-8'),
-                 '/app.js': ('app.js', 'text/javascript; charset=utf-8'),
-                 '/style.css': ('style.css', 'text/css; charset=utf-8')}
-        if self.path in files:
-            name, mime = files[self.path]
-            self.respond(200, (ROOT / name).read_bytes(), mime)
-        elif self.path == '/api/status':
-            self.respond(200, json.dumps(VIEWER.snapshot(), ensure_ascii=False).encode(), 'application/json')
-        elif urlsplit(self.path).path == '/video':
-            try:
-                params = parse_qs(urlsplit(self.path).query)
-                generation = int(params.get('generation', [str(VIEWER.generation)])[0])
-            except ValueError:
-                self.respond(400, b'Invalid generation', 'text/plain')
-                return
-            with VIEWER.condition:
-                stale = generation != VIEWER.generation
-            if stale:
-                self.respond(409, b'Selection changed', 'text/plain')
-                return
-            self.send_response(200)
-            self.send_header('Content-Type', 'multipart/x-mixed-replace; boundary=frame')
-            self.send_header('Cache-Control', 'no-store')
-            self.send_header('Connection', 'close')
-            self.end_headers()
-            last = -1
-            self.connection.settimeout(10)
-            try:
-                while not VIEWER.stop.is_set():
-                    with VIEWER.condition:
-                        VIEWER.condition.wait_for(lambda: VIEWER.stop.is_set() or
-                                                  VIEWER.generation != generation or
-                                                  (VIEWER.jpeg is not None and VIEWER.jpeg_generation == generation
-                                                   and VIEWER.frame_id != last), timeout=5)
-                        if VIEWER.generation != generation:
-                            break
-                        if VIEWER.jpeg is None or VIEWER.frame_id == last:
-                            continue
-                        jpeg = VIEWER.jpeg
-                        last = VIEWER.frame_id
-                    self.wfile.write(b'--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ' +
-                                     str(len(jpeg)).encode() + b'\r\n\r\n' + jpeg + b'\r\n')
-                    self.wfile.flush()
-            except (OSError, TimeoutError):
-                pass
-            self.close_connection = True
-        else:
-            self.respond(404, b'Not found', 'text/plain')
-
-    def do_POST(self):
-        origin = self.headers.get('Origin')
-        if (not self.allowed_host() or origin not in (None, 'http://127.0.0.1:%d' % PORT, 'http://localhost:%d' % PORT)
-                or self.headers.get('Content-Type') != 'application/json'):
-            self.respond(403, b'Forbidden', 'text/plain')
-            return
-        if self.path != '/api/channel':
-            self.respond(404, b'Not found', 'text/plain')
-            return
-        try:
-            length = int(self.headers.get('Content-Length', '0'))
-            if not 0 < length <= 128:
-                raise ValueError()
-            channel = json.loads(self.rfile.read(length))['channel']
-            if type(channel) is not int:
-                raise ValueError()
-            VIEWER.select(channel)
-        except (ValueError, KeyError):
-            self.respond(400, b'Invalid channel', 'text/plain')
-            return
-        self.respond(200, json.dumps({'ok': True, 'generation': VIEWER.generation}).encode(), 'application/json')
-
-
-def main():
-    global OUT
-    credentials()
-    (ROOT / '.runtime').mkdir(exist_ok=True)
-    handler = RotatingFileHandler(ROOT / '.runtime/viewer.log', maxBytes=1024 * 1024, backupCount=2)
-    handler.setFormatter(logging.Formatter('%(asctime)s %(message)s'))
-    LOG.addHandler(handler)
-    LOG.setLevel(logging.INFO)
-    server = ThreadingHTTPServer(('127.0.0.1', PORT), Handler)
-    server.daemon_threads = True
-    worker = threading.Thread(target=VIEWER.run, daemon=True)
-    worker.start()
-    print('Камеры: http://127.0.0.1:%d' % PORT, file=OUT)
+def catalog_main():
+    # Silence native output before loading the library; return only the catalog.
+    pipe = os.fdopen(os.dup(1), 'w', buffering=1)
+    null = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(null, 1)
+    os.dup2(null, 2)
+    os.close(null)
     try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        VIEWER.stop.set()
-        VIEWER.wakeup.set()
-        with VIEWER.condition:
-            VIEWER.condition.notify_all()
-        server.server_close()
-        if VIEWER.child is not None:
-            try:
-                VIEWER.child.terminate()
-            except ProcessLookupError:
-                pass
-        worker.join(timeout=15)
+        config = json.loads(sys.stdin.buffer.readline(16384))
+        transport = Transport(discover(), config['SERIAL_NUM'])
+        info = transport.login(config)
+        _, result = transport.request(1048, transport.command('ChannelTitle'))
+        names = result.get('ChannelTitle', [])
+        count = max(0, min(int(info['ChannelNum']), 256))
+        pipe.write(json.dumps([str(names[i])[:120] if i < len(names) else 'Камера %d' % (i+1)
+                               for i in range(count)], ensure_ascii=False) + '\n')
+        pipe.flush()
+        os._exit(0)
+    except Exception:
+        os._exit(1)
 
 
 if __name__ == '__main__':
     if '--worker' in sys.argv:
         worker_main()
-    else:
-        main()
+    elif '--catalog' in sys.argv:
+        catalog_main()
