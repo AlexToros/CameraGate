@@ -1,5 +1,6 @@
 import asyncio
 import struct
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -101,6 +102,53 @@ class FragmentsTests(unittest.TestCase):
 
 
 class ContinuousPoolTests(unittest.IsolatedAsyncioTestCase):
+    async def test_one_worker_serves_multiple_sources_and_recovers_after_process_exit(self):
+        # Exercise real process/pipe lifecycle without the proprietary SDK or
+        # recorder. Two source records cross one IPC pipe in a bounded batch.
+        worker = '''
+import json,os,struct,sys,time
+initial=json.loads(sys.stdin.readline())
+generation=sys.argv[1]
+packets=[]
+for cid in initial['camera_ids']:
+    base=dict(cid=cid,token=initial['tokens'][str(cid)],generation=generation)
+    for meta,data in [(dict(base,type='init',mime='video/mp4'),b'init'),(dict(base,type='media',key=True),b'key')]:
+        header=json.dumps(meta).encode()
+        packets.append(struct.pack('<II',len(header),len(data))+header+data)
+sys.stdout.buffer.write(b''.join(packets));sys.stdout.buffer.flush()
+if generation=='1':
+    time.sleep(.3)
+    os._exit(0)
+sys.stdin.read()
+'''
+        create = asyncio.create_subprocess_exec
+        processes=[]
+        async def launch(*args,**kwargs):
+            process=await create(sys.executable,'-c',worker,str(len(processes)+1),**kwargs)
+            processes.append(process)
+            return process
+        async def ready(pool,generation):
+            for _ in range(200):
+                if pool.sources and all(s.frames and s.generation==generation for s in pool.sources.values()):
+                    return
+                await asyncio.sleep(.02)
+            self.fail('Worker did not produce the expected generation')
+        pool=RelayPool({'test':True})
+        try:
+            with patch('backend.cameras.relay.asyncio.create_subprocess_exec',side_effect=launch):
+                pool.maintain([1,2])
+                await ready(pool,'1')
+                pool.subscribe([1,2]);pool.subscribe([2,1])
+                self.assertEqual(len(processes),1)
+                await ready(pool,'2')
+                self.assertEqual(len(processes),2)
+                self.assertEqual(set(pool.sources),{1,2})
+                await pool.replace(None)
+                self.assertTrue(all(p.returncode is not None for p in processes))
+                self.assertFalse(pool.sources)
+        finally:
+            await pool.close()
+
     async def test_old_worker_token_and_global_cache_bound(self):
         pool=RelayPool({'test':True})
         with patch.object(pool,'run',side_effect=asyncio.Event().wait):
