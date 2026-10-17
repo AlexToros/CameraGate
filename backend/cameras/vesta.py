@@ -94,23 +94,32 @@ def discover():
 
 
 class Transport:
-    def __init__(self, address, serial, mark=lambda _: None):
+    def __init__(self, address, serial, mark=lambda _: None, hub=None):
         self.events = queue.Queue(maxsize=4096)
+        self.event_lock = threading.Lock()
+        self.event_bytes = 0
         self.overflow = threading.Event()
         self.buffer = bytearray()
         self.session = 0
         self.sequence = 0
         self.connected = threading.Condition()
         self.connected_ids = set()
+        self.hub = hub
+        self.routes = {}
+        self.cid = 0
+        if hub is not None:
+            self.sdk, self.routes = hub.sdk, hub.routes
+            self.connected, self.connected_ids = hub.connected, hub.connected_ids
+            try:
+                self.connect_device(serial)
+            except Exception:
+                self.close()
+                raise
+            mark('p2p_connected')
+            return
         connect_cb = C.CFUNCTYPE(None, C.c_int)
         disconnect_cb = C.CFUNCTYPE(None, C.c_int, C.c_int)
         receive_cb = C.CFUNCTYPE(None, C.c_int, C.c_void_p, C.c_int)
-
-        def put(item):
-            try:
-                self.events.put_nowait(item)
-            except queue.Full:
-                self.overflow.set()
 
         @connect_cb
         def connected(cid):
@@ -120,13 +129,15 @@ class Transport:
 
         @disconnect_cb
         def disconnected(cid, reason):
-            if cid == self.cid:
-                put(('closed', reason))
+            target = self.routes.get(cid)
+            if target:
+                target.enqueue(('closed', reason))
 
         @receive_cb
         def received(cid, pointer, length):
-            if cid == self.cid and 0 < length <= 1024 * 1024:
-                put(C.string_at(pointer, length))
+            target = self.routes.get(cid)
+            if target and 0 < length <= 1024 * 1024:
+                target.enqueue(C.string_at(pointer, length))
 
         class Callbacks(C.Structure):
             _fields_ = [('connect', connect_cb), ('disconnect', disconnect_cb),
@@ -157,15 +168,27 @@ class Transport:
                 raise TimeoutError('Сервер P2P не отвечает')
             time.sleep(.1)
         mark('p2p_ready')
-        self.connect_device(serial)
-        mark('p2p_connected')
+        if serial is not None:
+            self.connect_device(serial)
+            mark('p2p_connected')
+
+    def enqueue(self, item):
+        size = len(item) if isinstance(item,bytes) else 0
+        with self.event_lock:
+            if self.event_bytes+size > 4*1024*1024:
+                self.overflow.set()
+                return
+            try:
+                self.events.put_nowait(item)
+                self.event_bytes += size
+            except queue.Full:
+                self.overflow.set()
 
     def connect_device(self, serial):
-        with self.connected:
-            self.connected_ids.clear()
         self.cid = self.sdk.vv_nat_connect(serial.encode(), 1)
         if self.cid <= 0:
             raise TransportClosed('Регистратор недоступен через P2P')
+        self.routes[self.cid] = self
         with self.connected:
             if not self.connected.wait_for(lambda: self.cid in self.connected_ids, timeout=3):
                 raise TransportClosed('P2P не подтвердил готовность соединения')
@@ -204,6 +227,8 @@ class Transport:
             if remaining <= 0:
                 raise queue.Empty()
             data = self.events.get(timeout=remaining)
+            with self.event_lock:
+                self.event_bytes -= len(data) if isinstance(data,bytes) else 0
             if isinstance(data, tuple):
                 raise TransportClosed('P2P-соединение закрыто: %d' % data[1])
             self.buffer.extend(data)
@@ -236,9 +261,14 @@ class Transport:
         # A monitor socket cannot be claimed twice on this firmware. Keep the
         # initialized P2P client but replace its device connection, then log in.
         old, self.cid = self.cid, 0
+        self.routes.pop(old, None)
+        with self.connected:
+            self.connected_ids.discard(old)
         self.sdk.vv_nat_close(old)
         with self.events.mutex:
             self.events.queue.clear()
+        with self.event_lock:
+            self.event_bytes = 0
         self.buffer.clear()
         self.overflow.clear()
         self.session = self.sequence = 0
@@ -259,9 +289,13 @@ class Transport:
 
     def close(self):
         if self.cid > 0:
+            self.routes.pop(self.cid, None)
+            with self.connected:
+                self.connected_ids.discard(self.cid)
             self.sdk.vv_nat_close(self.cid)
             self.cid = 0
-        self.sdk.vv_nat_exit()
+        if self.hub is None:
+            self.sdk.vv_nat_exit()
 
 
 class Frames:
@@ -274,8 +308,11 @@ class Frames:
         self.keyframes = 0
 
     def feed(self, data):
+        return b''.join(unit[0] for unit in self.feed_units(data))
+
+    def feed_units(self, data):
         self.buffer.extend(data)
-        output = bytearray()
+        output = []
         cursor = 0
         size = len(self.buffer)
         while cursor + 8 <= size:
@@ -306,10 +343,12 @@ class Frames:
                 self.keyframes += 1
                 self.ready = True
             if self.ready and kind in (0xfc, 0xfe, 0xfd):
-                output.extend(self.buffer[marker + header:end])
+                output.append((bytes(self.buffer[marker + header:end]), header == 16, self.codec, self.fps))
             cursor = end
         del self.buffer[:cursor]
-        return bytes(output)
+        if len(self.buffer) > 8 * 1024 * 1024 + 16:
+            raise ValueError('Media buffer overflow')
+        return output
 
 
 class Viewer:
