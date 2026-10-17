@@ -11,6 +11,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from backend.server import create_app, COOKIE, Portal
 from backend.store import Problem
 from backend.paths import FRONTEND
+from backend.cameras.relay import EncodedSource
 from tests.backend.test_store import DatabaseCase, PASSWORD
 
 
@@ -44,9 +45,15 @@ class FakeStreams:
         self.config = None
         self.sources = {}
         self.image = (FRONTEND/'icons/icon-192.png').read_bytes()
+        self.persistent = set()
+    def maintain(self, values):
+        self.persistent = set(values)
     def subscribe(self, values):
         for cid in values:
-            self.sources.setdefault(cid,SimpleNamespace(jpeg=self.image,frame_id=1,last_frame=time.monotonic(),state='test'))
+            if cid not in self.sources:
+                source = self.sources[cid] = EncodedSource(cid)
+                source.feed(dict(type='init',generation='test',mime='video/mp4; codecs="avc1.42E01E"'),b'init')
+                source.feed(dict(type='media',generation='test',key=True),self.image)
             self.sources[cid].last_frame = time.monotonic()
         return {cid:self.sources[cid] for cid in values}
     async def replace(self, config):
@@ -174,12 +181,29 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.get('/manifest.webmanifest')
         manifest = await response.json(content_type=None)
         self.assertEqual(manifest['display'],'standalone')
-        for path in ('/','/app.js','/style.css','/sw.js','/icon-192.png','/icon-512.png','/apple-touch-icon.png'):
+        for path in ('/','/app.js','/player.js','/style.css','/sw.js','/icon-192.png','/icon-512.png','/apple-touch-icon.png'):
             self.assertEqual((await self.client.get(path)).status,200)
         response = await self.client.post('/api/auth/login',json=dict(login='admin',password=PASSWORD))
         cookie = response.cookies[COOKIE]
         self.assertTrue(cookie['httponly'])
         self.assertEqual(cookie['samesite'],'Strict')
+
+    async def test_continuous_camera_set_tracks_builtin_edits_without_viewers(self):
+        async def wait_for(ids):
+            for _ in range(40):
+                if self.streams.persistent == set(ids):
+                    return
+                await asyncio.sleep(.05)
+            self.fail('Continuous set was not reconciled')
+        await wait_for([1,2])
+        response=await self.client.put('/api/admin/groups/1',headers=self.headers,
+            json=dict(name='Все камеры',camera_ids=[2]))
+        self.assertEqual(response.status,200)
+        await wait_for([2])
+        response=await self.client.put('/api/admin/groups/1',headers=self.headers,
+            json=dict(name='Все камеры',camera_ids=[]))
+        self.assertEqual(response.status,200)
+        await wait_for([])
 
     async def test_frontend_paths_do_not_depend_on_working_directory(self):
         with tempfile.TemporaryDirectory() as directory, chdir(directory):

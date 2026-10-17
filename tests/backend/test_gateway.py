@@ -33,11 +33,11 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(await remote.catalog(),['Камера 1','Камера 2'])
                     deadline = time.monotonic()+5
                     sources = remote.subscribe([1,2,1])
-                    while not all(s.jpeg for s in sources.values()) and time.monotonic()<deadline:
+                    while not all(s.frames for s in sources.values()) and time.monotonic()<deadline:
                         remote.subscribe([1,2])
                         await asyncio.sleep(.05)
                     self.assertEqual(len(sources),2)
-                    self.assertTrue(all(s.jpeg == upstream.image for s in sources.values()))
+                    self.assertTrue(all(s.frames[0][1] == upstream.image for s in sources.values()))
                     self.assertEqual(len(upstream.sources),2)
                     self.assertEqual(remote.subscribe([1])[1],sources[1])
                     await remote.replace(dict(config,PASSWORD='new-test-password'))

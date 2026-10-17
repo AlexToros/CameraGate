@@ -13,7 +13,8 @@ from urllib.parse import urlsplit
 
 from aiohttp import web, WSMsgType
 from .store import Store, Problem
-from .cameras.streams import make_pool, pack_frames
+from .cameras.streams import make_pool
+from .cameras.relay import pack_encoded
 from .paths import ROOT, FRONTEND
 
 COOKIE = 'viewer_session'
@@ -52,6 +53,13 @@ class Portal:
         task = asyncio.create_task(coro)
         self.background.add(task)
         task.add_done_callback(self.background.discard)
+
+    async def maintain_streams(self):
+        while True:
+            groups = self.store.snapshot['groups']
+            group = groups.get(1)
+            self.streams.maintain(group['camera_ids'] if group else [])
+            await asyncio.sleep(1)
 
     def origin(self, request):
         origin = request.headers.get('Origin')
@@ -209,7 +217,8 @@ class Portal:
                     if not isinstance(values,list) or len(values)>64 or any(type(c) is not int or c not in self.store.snapshot['cameras'] or not user['mask'] & (1<<c) for c in values):
                         raise Problem('Нет доступа к камере',403)
                     selected = set(values)
-                    sent.clear()
+                    for cid in sent.keys() - selected:
+                        sent.pop(cid)
                     authenticated = True
                 except (ValueError, TypeError, Problem):
                     await ws.close(code=4403,message='Нет доступа'.encode())
@@ -235,7 +244,7 @@ class Portal:
                     sources = self.streams.subscribe(selected)
                     # In-memory traversal only. The socket emits one bounded batch
                     # of latest frames; slow readers never accumulate video history.
-                    state, payload = pack_frames(sources,sent)
+                    state, payload = pack_encoded(sources,sent)
                     if state != statuses:
                         statuses = state
                         await asyncio.wait_for(ws.send_json(dict(type='status',cameras=state)),5)
@@ -246,7 +255,7 @@ class Portal:
                     if state != statuses:
                         statuses = state
                         await ws.send_json(dict(type='status',cameras=state))
-                await asyncio.sleep(.12)
+                await asyncio.sleep(.05)
         except (ConnectionError, asyncio.TimeoutError, RuntimeError):
             pass
         finally:
@@ -288,7 +297,7 @@ async def errors(request, handler):
         websocket_origin = ('wss' if public.scheme=='https' else 'ws')+'://'+public.netloc
         response.headers.update({'Cache-Control':'no-store', 'X-Content-Type-Options':'nosniff',
             'Referrer-Policy':'no-referrer','X-Frame-Options':'DENY',
-            'Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self' %s; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'" % websocket_origin})
+            'Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self' %s; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'" % websocket_origin})
     return response
 
 
@@ -298,7 +307,7 @@ def create_app(store, streams=None, secure=False, auto_sync=True):
     app[PORTAL] = portal
     app.router.add_get('/api/live',portal.live)
     app.router.add_route('*','/api/{tail:.*}',portal.api)
-    assets = {'/':'index.html','/app.js':'app.js','/style.css':'style.css','/manifest.webmanifest':'manifest.webmanifest',
+    assets = {'/':'index.html','/app.js':'app.js','/player.js':'player.js','/style.css':'style.css','/manifest.webmanifest':'manifest.webmanifest',
               '/sw.js':'sw.js','/icon-192.png':'icons/icon-192.png','/icon-512.png':'icons/icon-512.png','/apple-touch-icon.png':'icons/apple-touch-icon.png'}
     async def asset(request):
         return web.FileResponse(FRONTEND/assets[request.path])
@@ -311,6 +320,7 @@ def create_app(store, streams=None, secure=False, auto_sync=True):
     # Healthchecks do not return configuration, identity or media.
     app.router.add_get('/health',health)
     async def startup(app):
+        portal.background_task(portal.maintain_streams())
         if auto_sync:
             portal.background_task(portal.sync())
     async def shutdown(app):

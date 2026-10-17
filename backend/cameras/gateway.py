@@ -12,7 +12,7 @@ import secrets
 import time
 
 from aiohttp import web, WSMsgType
-from .streams import StreamPool, pack_frames
+from .relay import RelayPool, pack_encoded
 
 from ..paths import ROOT
 
@@ -20,7 +20,7 @@ from ..paths import ROOT
 def gateway_app(token, pool=None):
     if len(token)<40:
         raise ValueError('Use a random gateway token of at least 40 characters')
-    streams = pool or StreamPool()
+    streams = pool or RelayPool()
     lock = asyncio.Lock()
     @web.middleware
     async def auth(request, handler):
@@ -59,15 +59,19 @@ def gateway_app(token, pool=None):
                     break
                 try:
                     values = json.loads(message.data)['camera_ids']
-                    if not isinstance(values,list) or len(values)>64 or any(type(c) is not int or not 1<=c<=256 for c in values):
+                    if not isinstance(values,list) or len(values)>256 or any(type(c) is not int or not 1<=c<=256 for c in values):
                         raise ValueError()
                     selected = set(values)
+                    persistent = json.loads(message.data).get('persistent_camera_ids',[])
+                    if not isinstance(persistent,list) or len(persistent)>256 or any(type(c) is not int or not 1<=c<=256 for c in persistent):
+                        raise ValueError()
+                    streams.maintain(persistent)
                 except (ValueError,TypeError,KeyError):
                     await ws.close(code=4403)
         reader = asyncio.create_task(receive())
         try:
             while not ws.closed and streams.config == config:
-                states,payload = pack_frames(streams.subscribe(selected),sent)
+                states,payload = pack_encoded(streams.subscribe(selected),sent)
                 await asyncio.wait_for(ws.send_json(dict(cameras=states)),5)
                 if payload:
                     await asyncio.wait_for(ws.send_bytes(payload),5)

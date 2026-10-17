@@ -139,4 +139,5 @@ def make_pool(config):
     if os.environ.get('STREAM_GATEWAY'):
         from .gateway_client import RemotePool
         return RemotePool(config)
-    return StreamPool(config)
+    from .relay import RelayPool
+    return RelayPool(config)

@@ -1,48 +1,37 @@
-"""One authenticated multiplexed connection from a container to its media worker."""
+"""One private, authenticated multiplexed relay connection per portal."""
 import asyncio
 import json
 import os
 from pathlib import Path
 import struct
-import time
-from types import SimpleNamespace
+import uuid
 
 from aiohttp import ClientSession, ClientTimeout, WSMsgType
 
+from .relay import RelayPool
 
-class RemotePool:
+
+class RemotePool(RelayPool):
     def __init__(self, config):
-        self.config = config
+        super().__init__(config)
         self.url = os.environ['STREAM_GATEWAY'].rstrip('/')
-        token_file = os.environ.get('GATEWAY_TOKEN_FILE','.runtime/gateway.key')
-        self.headers = {'Authorization':'Bearer '+Path(token_file).read_text().strip()}
-        self.sources = {}
-        self.task = None
-
-    def subscribe(self, values):
-        now = time.monotonic()
-        for cid in values:
-            source = self.sources.get(cid)
-            if source is None:
-                source = self.sources[cid] = SimpleNamespace(jpeg=None,frame_id=0,last_frame=0,state='Подключение к камере…',touched=now)
-            source.touched = now
-        if self.task is None or self.task.done():
-            self.task = asyncio.create_task(self.run())
-        return {cid:self.sources[cid] for cid in values}
+        key = Path(os.environ.get('GATEWAY_TOKEN_FILE','.runtime/gateway.key'))
+        self.headers = {'Authorization':'Bearer '+key.read_text().strip()}
 
     async def run(self):
-        while True:
+        while self.config and not self.closed:
             try:
                 async with ClientSession(headers=self.headers,timeout=ClientTimeout(total=None,connect=5)) as session:
-                    async with session.ws_connect(self.url+'/live',heartbeat=15,max_msg_size=64*1024*1024) as ws:
-                        await ws.send_json(dict(config=self.config,camera_ids=[]))
+                    async with session.ws_connect(self.url+'/live',heartbeat=15,max_msg_size=8*1024*1024) as ws:
+                        await ws.send_json(dict(config=self.config))
                         async def subscriptions():
                             previous = None
                             while not ws.closed:
-                                selected = sorted(cid for cid,s in self.sources.items() if time.monotonic()-s.touched<2)
-                                if selected != previous:
-                                    await ws.send_json(dict(camera_ids=selected))
-                                    previous = selected
+                                self.prune()
+                                current = dict(camera_ids=sorted(self.sources),persistent_camera_ids=sorted(self.persistent))
+                                if current != previous:
+                                    await ws.send_json(current)
+                                    previous = current
                                 await asyncio.sleep(.3)
                         sender = asyncio.create_task(subscriptions())
                         try:
@@ -50,31 +39,36 @@ class RemotePool:
                                 if message.type == WSMsgType.TEXT:
                                     states = json.loads(message.data).get('cameras',{})
                                     for cid,source in self.sources.items():
-                                        source.state = states.get(str(cid),'Подключение…')
-                                        if source.state != 'Прямой эфир':
-                                            source.jpeg = None
+                                        state = states.get(str(cid),'Подключение…')
+                                        if state != 'Прямой эфир':
+                                            self.cache_bytes -= source.size+len(source.init)
+                                            source.reset(state)
                                 elif message.type == WSMsgType.BINARY:
                                     offset, data = 0,message.data
-                                    while offset+8 <= len(data):
-                                        cid,size = struct.unpack_from('!II',data,offset)
-                                        offset += 8
-                                        if size>8*1024*1024 or offset+size>len(data):
-                                            raise ValueError('Gateway frame size')
+                                    while offset+9 <= len(data):
+                                        cid,kind,size = struct.unpack_from('!IBI',data,offset)
+                                        offset += 9
+                                        if size>2*1024*1024+65536 or offset+size>len(data):
+                                            raise ValueError('Gateway packet size')
                                         source = self.sources.get(cid)
                                         if source:
-                                            source.jpeg = data[offset:offset+size]
-                                            source.frame_id += 1
-                                            source.last_frame = time.monotonic()
+                                            payload = data[offset:offset+size]
+                                            if kind == 1:
+                                                length = struct.unpack_from('!H',payload)[0]
+                                                self.ingest(dict(cid=cid,token=source.token,type='init',generation=uuid.uuid4().hex,
+                                                    mime=payload[2:2+length].decode('ascii')),payload[2+length:])
+                                            elif kind in (2,3):
+                                                self.ingest(dict(cid=cid,token=source.token,type='media',generation=source.generation,key=kind==3),payload)
                                         offset += size
                         finally:
                             sender.cancel()
                             await asyncio.gather(sender,return_exceptions=True)
             except asyncio.CancelledError:
-                return
+                raise
             except Exception:
                 for source in self.sources.values():
-                    source.jpeg = None
-                    source.state = 'Сервис видео недоступен. Повтор подключения…'
+                    source.reset('Сервис видео недоступен. Повтор подключения…')
+                self.cache_bytes = 0
                 await asyncio.sleep(2)
 
     async def catalog(self):
@@ -83,12 +77,3 @@ class RemotePool:
                 if response.status != 200:
                     raise RuntimeError('Gateway unavailable')
                 return await response.json()
-
-    async def replace(self, config):
-        if self.task:
-            self.task.cancel()
-            await asyncio.gather(self.task,return_exceptions=True)
-        self.task, self.sources, self.config = None, {}, config
-
-    async def close(self):
-        await self.replace(None)

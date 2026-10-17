@@ -2,7 +2,7 @@
 const root = document.querySelector("#app"), modal = document.querySelector("#modal");
 const h = value => String(value ?? "").replace(/[&<>"\x27]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","\x27":"&#39;"}[c]));
 let me, csrf, state, page = "wall", adminTab = "users", socket, socketEpoch = 0, saveTimer, saving = Promise.resolve(), refreshTimer, installPrompt, reconnectTimer;
-const images = new Map();
+const mediaStreams = new Map();
 const cameraRatios = new Map();
 let tileObserver, previewCameraId = null;
 let dragged;
@@ -33,8 +33,8 @@ function bindForm(form, submit) {
 }
 function dialog(title, body) { previewCameraId = null; modal.classList.remove("camera-preview"); modal.setAttribute("aria-label",title); modal.innerHTML = `<button class="close" aria-label="Закрыть">×</button><h2>${h(title)}</h2>${body}`; modal.querySelector(".close").onclick = () => modal.close(); modal.showModal(); }
 modal.addEventListener("click", event => { if (event.target === modal) { const rect = modal.getBoundingClientRect(); if(event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) modal.close(); } });
-modal.addEventListener("close", () => { previewCameraId = null; modal.classList.remove("camera-preview"); });
-function stopVideo() { clearTimeout(reconnectTimer); socketEpoch++; if(socket) socket.close(); socket = null; for(const image of images.values()) URL.revokeObjectURL(image.url); images.clear(); }
+modal.addEventListener("close", () => { const preview=modal.querySelector(".preview");if(preview)clearTile(preview);previewCameraId = null; modal.classList.remove("camera-preview"); });
+function stopVideo() { clearTimeout(reconnectTimer); socketEpoch++; if(socket) socket.close(); socket = null; for(const stream of mediaStreams.values()) stream.destroy(); mediaStreams.clear(); }
 function signedOut(message) { routeEpoch++; tileObserver?.disconnect(); document.body.classList.remove("fullscreen"); me = null; csrf = null; state = null; clearInterval(refreshTimer); clearTimeout(saveTimer); stopVideo(); if(modal.open) modal.close(); authView("login", null, message); }
 function authView(mode, invitation, message = "") {
   const setup = mode === "setup", invite = mode === "invite";
@@ -143,12 +143,13 @@ function gridOptions() {
 function renderTiles() {
   const wall = document.querySelector("#wall"); if(!wall) return;
   tileObserver?.disconnect();
+  for(const stream of mediaStreams.values())stream.releasePlayers();
   const columns = Math.min(state.layout.columns,Math.max(1,Math.floor((wall.clientWidth-16)/150)));
   wall.style.setProperty("--columns",columns);
   const cameras = new Map(state.cameras.map(c => [c.id,c]));
   wall.innerHTML = state.layout.tiles.length ? state.layout.tiles.map((tile,index) => {
     const name = cameras.get(tile.camera_id)?.name || "Выбрать камеру";
-    return `<article class="tile" data-tile="${h(tile.id)}" aria-label="Экран ${index+1}"><div class="tile-head" draggable="true"><span class="status-dot" aria-hidden="true"></span><button class="camera-trigger" aria-label="Камера экрана ${index+1}: ${h(name)}" title="${h(name)}">${h(name)}${icon("down")}</button><button class="tile-menu icon-button" title="Настройки экрана" aria-label="Настройки экрана ${index+1}">${icon("more")}</button></div><div class="picture"><img alt="" hidden><span class="stream-state">${tile.camera_id ? "Подключение…" : "Выбрать камеру"}</span><button class="tile-expand icon-button" title="Увеличить" aria-label="Увеличить экран ${index+1}">${icon("expand")}</button></div></article>`;
+    return `<article class="tile" data-tile="${h(tile.id)}" aria-label="Экран ${index+1}"><div class="tile-head" draggable="true"><span class="status-dot" aria-hidden="true"></span><button class="camera-trigger" aria-label="Камера экрана ${index+1}: ${h(name)}" title="${h(name)}">${h(name)}${icon("down")}</button><button class="tile-menu icon-button" title="Настройки экрана" aria-label="Настройки экрана ${index+1}">${icon("more")}</button></div><div class="picture"><video muted autoplay playsinline disableRemotePlayback hidden></video><span class="stream-state">${tile.camera_id ? "Подключение…" : "Выбрать камеру"}</span><button class="tile-expand icon-button" title="Увеличить" aria-label="Увеличить экран ${index+1}">${icon("expand")}</button></div></article>`;
   }).join("") : `<div class="empty"><p>Добавьте экран или выберите сетку.</p><button class="primary" id="empty-add">Добавить экран</button></div>`;
   if(!state.layout.tiles.length) { document.querySelector("#empty-add").onclick = () => document.querySelector("#add-tile").click(); return; }
   const tilesById = new Map(state.layout.tiles.map(t => [t.id,t]));
@@ -205,7 +206,7 @@ function tileOptions(tile) {
 }
 function previewCamera(tile) {
   const camera = state.cameras.find(c => c.id === tile.camera_id); if(!camera) return;
-  dialog(camera.name,`<div class="preview tile"><div class="picture"><img alt="" hidden><span class="stream-state">Подключение…</span></div></div>`);
+  dialog(camera.name,`<div class="preview tile"><div class="picture"><video muted autoplay playsinline disableRemotePlayback hidden></video><span class="stream-state">Подключение…</span></div></div>`);
   modal.classList.add("camera-preview"); previewCameraId = tile.camera_id;
   drawCached({camera_id:previewCameraId},modal.querySelector(".preview"));
 }
@@ -217,18 +218,16 @@ function save() {
   return saving;
 }
 async function flushSave() { if(saveTimer) { clearTimeout(saveTimer); saveTimer = null; return save(); } return saving; }
-function clearTile(element) { element.classList.remove("live"); const image = element.querySelector("img"), replacement = new Image(); replacement.alt = ""; replacement.hidden = true; image.onload = null; image.removeAttribute("src"); image.replaceWith(replacement); element.querySelector(".stream-state").textContent = "Подключение…"; }
+function clearTile(element) { element.classList.remove("live"); if(element.cameraStream)element.cameraStream.detach(element);element.cameraStream=null;const video=element.querySelector("video");if(video){video.pause();video.removeAttribute("src");video.load();video.hidden=true;}element.querySelector(".stream-state").textContent="Подключение…"; }
 function drawCached(tile, element) {
-  const cached = images.get(tile.camera_id);
-  if(!cached || Date.now()-cached.at>5000) return;
-  const image = element.querySelector("img"), expectedCamera = tile.camera_id, expectedURL = cached.url;
-  image.onload = () => { if(tile.camera_id === expectedCamera && image.src === expectedURL && element.isConnected && element.querySelector("img") === image) { cameraRatios.set(expectedCamera,image.naturalWidth/image.naturalHeight); element.style.setProperty("--ratio",image.naturalWidth/image.naturalHeight); image.hidden = false; element.classList.add("live"); } };
-  image.src = expectedURL;
+  const stream=mediaStreams.get(tile.camera_id);if(!stream)return;
+  if(element.cameraStream && element.cameraStream!==stream)clearTile(element);
+  element.cameraStream=stream;stream.attach(element);
 }
 function subscriptions() { return [...new Set(state.layout.tiles.map(t => t.camera_id).filter(Boolean))]; }
 function subscribe() {
   const active = new Set(subscriptions());
-  for(const [cid,value] of images) if(!active.has(cid)) { URL.revokeObjectURL(value.url); images.delete(cid); }
+  for(const [cid,stream] of mediaStreams) if(!active.has(cid)) { stream.destroy(); mediaStreams.delete(cid); }
   if(socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({csrf,camera_ids:[...active]}));
 }
 function connectVideo() {
@@ -249,7 +248,22 @@ function connectVideo() {
     }
     const view = new DataView(event.data), active = new Set(subscriptions()), tiles = new Map(state.layout.tiles.map(t => [t.id,t])), incoming = new Map();
     let offset = 0;
-    while(offset+8<=view.byteLength) { const cid = view.getUint32(offset), length = view.getUint32(offset+4); offset += 8; if(length>8*1024*1024 || offset+length>view.byteLength) break; if(active.has(cid)) { const old = images.get(cid); const value = {url:URL.createObjectURL(new Blob([event.data.slice(offset,offset+length)],{type:"image/jpeg"})),at:Date.now()}; images.set(cid,value); incoming.set(cid,value); if(old) setTimeout(() => URL.revokeObjectURL(old.url),1500); } offset += length; }
+    try {
+      while(offset+9<=view.byteLength) {
+        const cid=view.getUint32(offset),kind=view.getUint8(offset+4),length=view.getUint32(offset+5);offset+=9;
+        if(length>2*1024*1024+65536 || offset+length>view.byteLength)throw new Error("Неверный пакет видео");
+        if(active.has(cid)) {
+          const data=new Uint8Array(event.data.slice(offset,offset+length));
+          if(kind===1) {
+            const size=new DataView(data.buffer).getUint16(0);if(size>256 || size+2>=data.length)throw new Error("Неверный формат видео");
+            const mime=new TextDecoder().decode(data.subarray(2,2+size));mediaStreams.get(cid)?.destroy();
+            mediaStreams.set(cid,new CameraStream(mime,data.slice(2+size),ratio=>cameraRatios.set(cid,ratio)));
+          } else if(kind===2 || kind===3)mediaStreams.get(cid)?.receive(kind,data);
+          incoming.set(cid,true);
+        }
+        offset+=length;
+      }
+    } catch { ws.close();return; }
     document.querySelectorAll(".tile").forEach(element => { const tile = tiles.get(element.dataset.tile); if(incoming.has(tile?.camera_id)) drawCached(tile,element); });
     if(previewCameraId && incoming.has(previewCameraId)) { const preview = modal.querySelector(".preview"); if(preview) drawCached({camera_id:previewCameraId},preview); }
   };

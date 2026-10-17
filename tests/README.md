@@ -11,6 +11,7 @@ TEST_DATABASE_URL="postgresql://viewer@localhost:55432/video_viewer?host=$PWD/.r
 - `test_api.py`: API, CSRF, cookie, PWA-файлы, авторизация/отзыв WebSocket, proxy-лимиты входа.
 - `test_gateway.py`: закрытый медиашлюз и общие источники для нескольких зрителей.
 - `test_protocol.py`: DVRIP, сборка пакетов, защита от старых кадров, восстановление и команды worker/FFmpeg.
+- `test_relay.py`: MP4-фрагменты, курсоры зрителей, старт с ключевого кадра, поколения источников, лимиты буферов и постоянная группа. `python -m tests.backend.bench_relay` — ручной benchmark раздачи для 1/16/32/64 камер.
 
 PostgreSQL-проверки создают отдельные случайные схемы и удаляют только их. Без TEST_DATABASE_URL они пропускаются. Не используйте production-DSN для тестов.
 

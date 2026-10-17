@@ -4,6 +4,7 @@
 
 - `index.html` — оболочка приложения;
 - `app.js` — регистрация, вход, видеостена и администрирование;
+- `player.js` — воспроизведение сжатого fragmented MP4 через MediaSource или ManagedMediaSource, ограниченные очереди и очистка видео при переключении;
 - `style.css` — оформление и адаптив;
 - `manifest.webmanifest`, `sw.js`, `icons/` — PWA.
 
