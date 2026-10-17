@@ -120,10 +120,16 @@ function wall() {
   document.querySelector(".exit-fullscreen").onclick = () => { document.body.classList.remove("fullscreen"); if(document.fullscreenElement) document.exitFullscreen(); };
   renderTiles(); connectVideo();
 }
+function preferredCameras() {
+  const group = me.role === "admin" ? state.groups.find(g => g.builtin) : null;
+  if(!group) return state.cameras;
+  const members = new Set(group.camera_ids);
+  return state.cameras.filter(camera => members.has(camera.id));
+}
 function applyPreset(count) {
   const existing = state.layout.tiles;
   const selected = new Set(existing.map(t => t.camera_id).filter(Boolean));
-  const available = state.cameras.filter(c => !selected.has(c.id));
+  const available = preferredCameras().filter(c => !selected.has(c.id));
   let cursor = 0;
   state.layout = {columns:count === 6 ? 3 : Math.sqrt(count),tiles:Array.from({length:count},(_,i) => ({id:existing[i]?.id || uid(),camera_id:existing[i]?.camera_id ?? available[cursor++]?.id ?? null,width:1,height:1}))};
   modal.close(); renderTiles(); changed(); subscribe();
@@ -170,7 +176,7 @@ function renderTiles() {
   });
 }
 function chooseCamera(tile) {
-  dialog("Выбрать камеру",`<div class="camera-filters"><input type="search" id="camera-search" placeholder="Найти камеру" aria-label="Найти камеру" autocomplete="off"><select id="camera-group" aria-label="Группа камер"><option value="0">Все доступные</option>${state.groups.filter(g => !g.builtin).map(g => `<option value="${g.id}">${h(g.name)}</option>`).join("")}</select></div><div class="camera-choices" id="camera-choices"></div>`);
+  dialog("Выбрать камеру",`<div class="camera-filters"><input type="search" id="camera-search" placeholder="Найти камеру" aria-label="Найти камеру" autocomplete="off"><select id="camera-group" aria-label="Группа камер"><option value="0">Все доступные</option>${state.groups.map(g => `<option value="${g.id}" ${me.role === "admin" && g.builtin ? "selected" : ""}>${h(g.name)}</option>`).join("")}</select></div><div class="camera-choices" id="camera-choices"></div>`);
   const groups = new Map(state.groups.map(g => [g.id,new Set(g.camera_ids)]));
   function filter() {
     const query = modal.querySelector("#camera-search").value.trim().toLocaleLowerCase();
@@ -270,7 +276,7 @@ async function admin(refreshState = false) {
       body.innerHTML = `<div class="row between"><h2>Приглашения</h2><button id="new-invite" class="primary">Создать приглашение</button></div><p class="muted">Ссылка действует семь дней и позволяет создать только одну учётную запись. Скопировать её можно сразу после создания.</p>${data.invitations.length ? `<div class="table-wrap"><table><thead><tr><th>Получатель</th><th>Роль</th><th></th></tr></thead><tbody>${data.invitations.map(i => `<tr><td>${h(i.last_name)} ${h(i.first_name)}</td><td>${roleName(i.role)}</td><td><button data-revoke="${i.id}" class="danger">Отозвать</button></td></tr>`).join("")}</tbody></table></div>` : `<p class="empty">Приглашений пока нет</p>`}`;
       body.querySelector("#new-invite").onclick = inviteForm; body.querySelectorAll("[data-revoke]").forEach(button => button.onclick = async () => { try { await api(`/api/admin/invites/${button.dataset.revoke}`,"DELETE",{}); admin(); } catch(e) { toast(e.message); } });
     } else if(tab === "groups") {
-      body.innerHTML = `<div class="row between"><h2>Группы камер</h2><button id="new-group" class="primary">Создать группу</button></div><p class="muted">Выдавайте доступ к группе — новые камеры в ней станут доступны автоматически.</p><div class="table-wrap"><table><thead><tr><th>Название</th><th>Камер</th><th></th></tr></thead><tbody>${state.groups.map(g => `<tr><td>${h(g.name)}${g.builtin ? `<span class="muted">Системная группа, включает все камеры</span>` : ""}</td><td>${g.builtin ? state.cameras.length : g.camera_ids.length}</td><td>${!g.builtin ? `<button data-group="${g.id}">Изменить</button>` : ""}</td></tr>`).join("")}</tbody></table></div>`;
+      body.innerHTML = `<div class="row between"><h2>Группы камер</h2><button id="new-group" class="primary">Создать группу</button></div><p class="muted">Доступ к группе включает камеры, выбранные в её составе.</p><div class="table-wrap"><table><thead><tr><th>Название</th><th>Камер</th><th></th></tr></thead><tbody>${state.groups.map(g => `<tr><td>${h(g.name)}${g.builtin ? `<span class="muted">Основной список для просмотра</span>` : ""}</td><td>${g.camera_ids.length}</td><td><button data-group="${g.id}">Изменить</button></td></tr>`).join("")}</tbody></table></div>`;
       body.querySelector("#new-group").onclick = () => groupForm(); const groups = new Map(state.groups.map(g => [g.id,g])); body.querySelectorAll("[data-group]").forEach(button => button.onclick = () => groupForm(groups.get(+button.dataset.group)));
     } else if(tab === "cameras") {
       body.innerHTML = `<div class="row between"><h2>Названия камер</h2><button id="sync">Обновить список камер</button></div><p class="muted">Эти названия будут видны всем пользователям.</p><form class="stack form-limit"><div class="camera-names">${state.cameras.map(c => `<label class="camera-name"><span>Канал ${c.id}</span><input name="camera_${c.id}" value="${h(c.name)}" required maxlength="120" aria-label="Имя камеры ${c.id}"></label>`).join("") || `<p>${h(state.connection_state)}</p>`}</div><div class="error"></div><button type="submit" class="primary">Сохранить названия</button></form>`;
@@ -293,7 +299,8 @@ function userForm(user) {
   const form = modal.querySelector("form"); bindForm(form,async data => { await api(`/api/admin/users/${user.id}`,"PUT",{...data,...accessValue(form),blocked:form.elements.blocked.checked}); modal.close(); toast("Права сохранены"); await refresh(); if(me) admin(); });
 }
 function groupForm(group = {}) {
-  dialog(group.id ? "Изменить группу" : "Новая группа",`<form class="stack"><label>Название группы<input name="name" value="${h(group.name)}" maxlength="100" required></label><h3>Камеры</h3><div class="checks">${state.cameras.map(c => `<label><input type="checkbox" name="camera_ids" value="${c.id}" ${(group.camera_ids || []).includes(c.id) ? "checked" : ""}>${h(c.name)}</label>`).join("") || "Камер пока нет"}</div><div class="error"></div><div class="actions">${group.id ? `<button type="button" class="danger" id="delete-group">Удалить группу</button>` : ""}<button type="submit" class="primary">Сохранить группу</button></div></form>`);
+  const selected = new Set(group.camera_ids || []);
+  dialog(group.id ? "Изменить группу" : "Новая группа",`<form class="stack"><label>Название группы<input name="name" value="${h(group.name)}" maxlength="100" required ${group.builtin ? "readonly" : ""}></label>${group.builtin ? `<p class="muted">Исключите ненужные камеры из основного списка. Доступ через другие группы и отдельные разрешения сохранится.</p>` : ""}<h3>Камеры</h3><div class="checks">${state.cameras.map(c => `<label><input type="checkbox" name="camera_ids" value="${c.id}" ${selected.has(c.id) ? "checked" : ""}>${h(c.name)}</label>`).join("") || "Камер пока нет"}</div><div class="error"></div><div class="actions">${group.id && !group.builtin ? `<button type="button" class="danger" id="delete-group">Удалить группу</button>` : ""}<button type="submit" class="primary">Сохранить группу</button></div></form>`);
   const form = modal.querySelector("form"); bindForm(form,async data => { await api(`/api/admin/groups${group.id ? `/${group.id}` : ""}`,group.id ? "PUT" : "POST",{name:data.name,camera_ids:accessValue(form).camera_ids}); modal.close(); state.groups = (await api("/api/state")).groups; admin(); toast("Группа сохранена"); });
   const remove = modal.querySelector("#delete-group"); if(remove) remove.onclick = async () => { if(!confirm("Удалить группу? Доступ, выданный через неё, прекратится.")) return; try { await api(`/api/admin/groups/${group.id}`,"DELETE",{}); modal.close(); state.groups = (await api("/api/state")).groups; admin(); } catch(e) { toast(e.message); } };
 }

@@ -114,12 +114,17 @@ class Store:
     def _snapshot(self, conn):
         users = conn.execute('SELECT id,login,first_name,last_name,role,blocked,camera_ids,group_ids FROM users ORDER BY id').fetchall()
         cameras = conn.execute('SELECT id,display_name AS name,active FROM cameras ORDER BY id').fetchall()
-        groups = conn.execute('SELECT * FROM camera_groups ORDER BY id').fetchall()
+        groups = conn.execute("SELECT g.*,coalesce(s.value,'[]') AS excluded_camera_ids_json FROM camera_groups g LEFT JOIN settings s ON g.id=1 AND s.key='all_cameras_excluded_ids' ORDER BY g.id").fetchall()
         sessions = conn.execute('SELECT token_hash,user_id,csrf,extract(epoch FROM expires_at) AS expires FROM sessions WHERE expires_at>now()').fetchall()
         camera_map = {c['id']: c for c in cameras if c['active']}
+        for group in groups:
+            excluded = set(json.loads(group.pop('excluded_camera_ids_json')))
+            if group['builtin']:
+                group['excluded_camera_ids'] = excluded
+                group['camera_ids'] = [cid for cid in camera_map if cid not in excluded]
         group_map = {g['id']: g for g in groups}
         all_mask = sum(1 << cid for cid in camera_map)
-        masks = {g['id']: all_mask if g['builtin'] else sum(1 << cid for cid in g['camera_ids'] if cid in camera_map) for g in groups}
+        masks = {g['id']: sum(1 << cid for cid in g['camera_ids'] if cid in camera_map) for g in groups}
         user_map = {}
         for user in users:
             mask = sum(1 << cid for cid in user['camera_ids'] if cid in camera_map)
@@ -283,7 +288,12 @@ class Store:
             self._admin(conn, actor)
             self.check_grants(dict(camera_ids=cameras, group_ids=[]))
             if gid == 1:
-                raise Problem('Группа «Все камеры» изменяется автоматически', 409)
+                group = self.snapshot['groups'][1]
+                if name != group['name']:
+                    raise Problem('Название системной группы менять нельзя', 409)
+                excluded = (group['excluded_camera_ids'] | set(self.snapshot['cameras'])) - set(cameras)
+                conn.execute("INSERT INTO settings(key,value) VALUES ('all_cameras_excluded_ids',%s) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (json.dumps(sorted(excluded)),))
+                return {'id': 1}
             if gid:
                 row = conn.execute('UPDATE camera_groups SET name=%s,camera_ids=%s WHERE id=%s AND NOT builtin RETURNING id', (name, cameras, gid)).fetchone()
                 if not row:
@@ -329,6 +339,9 @@ class Store:
             row = conn.execute('SELECT value FROM layouts WHERE user_id=%s', (user['id'],)).fetchone()
         if not row:
             allowed = self.permitted(user)
+            if user['role'] == 'admin':
+                members = set(self.snapshot['groups'][1]['camera_ids'])
+                allowed = [camera for camera in allowed if camera['id'] in members]
             return dict(columns=1, tiles=[dict(id=secrets.token_hex(8), camera_id=allowed[0]['id'] if allowed else None, width=1, height=1)])
         value = row['value']
         for tile in value['tiles']:

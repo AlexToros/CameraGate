@@ -13,7 +13,7 @@
 - Users sign in, see only permitted cameras and save their own configurable video wall.
 - Administrators can issue one-use invitations with preassigned first/last names, role and camera/group grants. Registration asks only for login and password.
 - Administrators manage users, blocking, grants, camera groups and globally visible camera names.
-- The built-in group «Все камеры» always contains all cameras. Administrators implicitly have access to it.
+- The built-in group «Все камеры» starts with all discovered channels, but its membership is editable. Exclusions affect only this group; other grants remain valid. Keep its name/deletion protected. Admins retain access to the full management catalog, while camera picking/preset additions default to the group's curated list.
 - Device connection settings (ID, UserName, Password) are write-only in the API/UI. Missing settings produce a useful viewer error.
 - Blocking and permission changes must affect existing sessions and active streams, not only new requests.
 - PostgreSQL in all environments; do not introduce SQLite. Keep Docker Compose and nginx configuration for later deployment, but simplify the local preview.
@@ -33,6 +33,7 @@
 - `backend/server.py`: aiohttp HTTP/API and one multiplexed WebSocket per browser. Bind loopback locally. PUBLIC_ORIGIN/COOKIE_SECURE configure a future HTTPS entrypoint.
 - `backend/store.py`, `database/schema.sql`: PostgreSQL 17, transactional bootstrap/invitations, server sessions, ACL snapshots and saved per-user grids. Passwords use salted PBKDF2; upstream credentials use Fernet with a separate runtime key.
 - Initial SQL is idempotent; introduce versioned migrations before changing an already deployed schema.
+- Built-in group exclusions use the existing settings row all_cameras_excluded_ids (JSON text); no schema change. The group snapshot joins that one setting in its existing bulk query and exposes effective membership. Preserve exclusions for temporarily missing channels; newly discovered IDs join automatically.
 - Active users/rights/sessions are an in-memory bulk snapshot, refreshed atomically after mutations. This currently requires one portal process; replicas require shared invalidation and source coordination.
 - `backend/cameras/streams.py`: one lazy shared producer per unique camera; frames stay in memory. Stop unused producers. Do not duplicate upstream connections per viewer/tile.
 - `backend/cameras/vesta.py` owns only the native transport/decoder. Credentials enter worker stdin, never command-line arguments. Native media workers skip redundant catalog queries; catalog discovery is separate.

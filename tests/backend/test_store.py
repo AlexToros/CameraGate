@@ -68,6 +68,44 @@ class DatabaseCase(unittest.TestCase):
 
 
 class StoreTests(DatabaseCase):
+    def test_all_cameras_group_is_editable_without_limiting_admin_catalog(self):
+        admin,_ = self.admin()
+        self.store.sync_cameras(['One','Two','Three'])
+        user,token = self.invited(admin,camera_ids=[],group_ids=[1])
+        self.assertEqual(self.store.snapshot['groups'][1]['camera_ids'], [1,2,3])
+        self.store.save_group(admin['id'],1,dict(name='Все камеры',camera_ids=[1,3]))
+        self.assertEqual(self.store.snapshot['groups'][1]['camera_ids'], [1,3])
+        self.assertEqual([c['id'] for c in self.store.permitted(self.store.user(token)[0])], [1,3])
+        self.assertEqual([c['id'] for c in self.store.permitted(self.store.snapshot['users'][admin['id']])], [1,2,3])
+        with self.assertRaises(Problem):
+            self.store.save_group(admin['id'],1,dict(name='Другое имя',camera_ids=[]))
+        with self.assertRaises(Problem):
+            self.store.delete_group(admin['id'],1)
+
+    def test_exclusions_preserve_other_grants_and_survive_restart(self):
+        admin,_ = self.admin()
+        self.store.sync_cameras(['One','Two','Three'])
+        gid = self.store.save_group(admin['id'],None,dict(name='Двор',camera_ids=[3]))['id']
+        user,token = self.invited(admin,camera_ids=[2],group_ids=[1,gid])
+        self.store.save_group(admin['id'],1,dict(name='Все камеры',camera_ids=[]))
+        self.store.close()
+        self.store = Store(self.dsn,self.temp.name)
+        self.assertEqual(self.store.snapshot['groups'][1]['camera_ids'], [])
+        self.assertEqual([c['id'] for c in self.store.permitted(self.store.user(token)[0])], [2,3])
+        self.store.save_group(admin['id'],1,dict(name='Все камеры',camera_ids=[1]))
+        self.assertEqual([c['id'] for c in self.store.permitted(self.store.user(token)[0])], [1,2,3])
+
+    def test_catalog_sync_keeps_exclusions_and_includes_new_channels(self):
+        admin,_ = self.admin()
+        self.store.sync_cameras(['One','Two','Three'])
+        self.store.save_group(admin['id'],1,dict(name='Все камеры',camera_ids=[3]))
+        self.store.sync_cameras(['One'])
+        self.store.save_group(admin['id'],1,dict(name='Все камеры',camera_ids=[]))
+        self.store.sync_cameras(['One','Two','Three','Four'])
+        self.assertEqual(self.store.snapshot['groups'][1]['camera_ids'], [3,4])
+        current = self.store.snapshot['users'][admin['id']]
+        self.assertEqual(self.store.layout(current)['tiles'][0]['camera_id'], 3)
+
     def test_only_pending_invitations_remain_in_database(self):
         admin,_ = self.admin()
         data = dict(first_name='Test',last_name='Person',role='user')

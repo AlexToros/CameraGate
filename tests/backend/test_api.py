@@ -125,6 +125,25 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ws.close_code,4401)
         self.assertEqual((await self.client.get('/api/state',headers=headers)).status,401)
 
+    async def test_all_group_edit_revokes_stream_and_keeps_full_admin_catalog(self):
+        user,headers,csrf = await self.viewer()
+        admin_id = self.me['user']['id']
+        self.store.edit_user(admin_id,user['id'],dict(self.store.public_user(user),camera_ids=[],group_ids=[1],blocked=False))
+        self.streams.config = {'test':True}
+        ws = await self.client.ws_connect('/api/live',headers=headers)
+        await ws.send_json(dict(csrf=csrf,camera_ids=[2]))
+        self.assertEqual((await ws.receive(timeout=3)).type, WSMsgType.TEXT)
+        self.assertEqual((await ws.receive(timeout=3)).type, WSMsgType.BINARY)
+        response = await self.client.put('/api/admin/groups/1',json=dict(name='Все камеры',camera_ids=[1]),headers=self.headers)
+        self.assertEqual(response.status,200)
+        self.assertEqual(await ws.receive_json(timeout=3),dict(type='revoked',camera_ids=[2]))
+        admin_state = await (await self.client.get('/api/state')).json()
+        self.assertEqual([c['id'] for c in admin_state['cameras']], [1,2])
+        self.assertEqual(admin_state['groups'][0]['camera_ids'], [1])
+        viewer_state = await (await self.client.get('/api/state',headers=headers)).json()
+        self.assertEqual([c['id'] for c in viewer_state['cameras']], [1])
+        await ws.close()
+
     async def test_websocket_cannot_request_ungranted_camera(self):
         _,headers,csrf = await self.viewer()
         self.streams.config = {'test':True}
