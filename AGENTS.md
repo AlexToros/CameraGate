@@ -68,3 +68,4 @@
 - Local portal implemented with PostgreSQL/PWA; the user has created a real account. Preserve users and layouts during routine development and restarts.
 - User confirmed live video works with VPN disabled. Earlier missing-media diagnostics do not establish a recorder or decoder fault; do not resume connection experiments without a new reason.
 - VPS: Ubuntu x86_64; deploy from a root session. aspyankov has SSH access but no sudo/Docker privilege; do not grant root-equivalent group membership as a deployment shortcut.
+- Production containers built and started; existing user/layout migrated with the matching encryption key and without local sessions. Authenticated API and two real JPEG streams verified on Linux. Domain is newly registered: REG.RU authoritative servers publish A correctly, but .ru delegation was still NXDOMAIN at deployment time. Initial HTTPS timer waits for DNS; certificate issuance and renewal dry-run remain unverified until delegation propagates.

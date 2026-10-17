@@ -1,0 +1,10 @@
+[Unit]
+Description=Retry initial camera portal HTTPS setup after DNS delegation
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=30min
+Unit=video-viewer-https.service
+
+[Install]
+WantedBy=timers.target
