@@ -2,7 +2,7 @@
 
 ## Scope and workflow
 
-- Deployment to the user's VPS and bogdanova34.ru is authorized by the current request. GitHub: public AlexToros/video-viewer; main requires owner review for collaborators, with owner bypass. Never give collaborators administrator access merely to push changes.
+- Deployment to the user's VPS with both bogdanova34.site and bogdanova34.ru is authorized. Both hosts must serve the same portal without redirecting one to the other. GitHub: public AlexToros/video-viewer; main requires owner review for collaborators, with owner bypass. Never give collaborators administrator access merely to push changes.
 - Keep changes in small coherent commits. Never commit `.env`, `.runtime/`, databases, SDK binaries, secrets, diagnostics or camera images.
 - Shared global user instructions and `/Users/aspyankov/.codex/RTK.md` apply. Prefix shell commands with `rtk`.
 - This file holds repository architecture and implementation context as requested by the user. Temporary reports and detailed task journals belong outside git.
@@ -44,6 +44,7 @@
 - `infrastructure/compose.yaml` keeps the local optional gateway setup. `deployment/compose.production.yaml` runs native Linux transport, PostgreSQL and nginx with memory/log limits; only nginx publishes 80/443. Encrypted connection data requires the matching /data/secret.key when migrating the DB. Do not expose initial bootstrap publicly before restoring the existing user database.
 - Production TLS: Certbot webroot /var/www/letsencrypt, HTTP challenge in infrastructure/nginx/acme.conf, infrastructure/nginx/production.conf after issuance. deployment/scripts/enable-https.sh installs the deploy hook and enables certbot.timer; deployment/scripts/renew-certificate.sh validates and reloads nginx after renewal.
 - TRUST_PROXY=1 is production-only: app has no published port, nginx overwrites X-Real-IP, and login throttles use that validated client IP. Never enable it with direct untrusted access to app. The local optional gateway compose leaves it off.
+- PUBLIC_ORIGIN is the primary host; ADDITIONAL_PUBLIC_ORIGINS is an explicit comma-separated allowlist. Select CSP/WebSocket origin by the configured request Host, and require Origin to match that host, even when another host is also allowed. Certbot certificate name bogdanova34-portal covers both domains; HTTPS readiness marker is certificate-specific.
 
 ## Existing video transport
 

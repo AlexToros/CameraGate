@@ -1,4 +1,4 @@
-# Production: bogdanova34.ru
+# Production: bogdanova34.site и bogdanova34.ru
 
 На VPS Ubuntu x86_64 приложение находится в `/opt/video-viewer`. Управление выполняется из root-сессии. Обычному SSH-пользователю не назначены sudo или группа Docker. Исходники: публичный репозиторий `AlexToros/video-viewer`; основная ветка `main` защищена правилом PR с одобрением владельца, владелец имеет bypass.
 
@@ -16,7 +16,7 @@
 
 ## HTTPS
 
-DNS: A-запись `@` → `185.22.153.61`, серверы `ns1.reg.ru`/`ns2.reg.ru`; делегирование должно появиться и в зоне `.ru`. nginx сначала использует `infrastructure/nginx/acme.conf`: публичен только HTTP challenge, остальные запросы получают 503. После выпуска сертификата `deployment/scripts/enable-https.sh` включает `infrastructure/nginx/production.conf`, HTTPS и перенаправление HTTP → HTTPS.
+DNS: для обоих доменов A-запись `@` → `185.22.153.61`, серверы `ns1.reg.ru`/`ns2.reg.ru`; оба домена должны разрешаться публичным DNS. nginx сначала использует `infrastructure/nginx/acme.conf`: публичен только HTTP challenge, остальные запросы получают 503. После выпуска сертификата `deployment/scripts/enable-https.sh` включает `infrastructure/nginx/production.conf`, HTTPS и перенаправление HTTP → HTTPS.
 
 Первоначальный выпуск:
 
@@ -25,7 +25,9 @@ cd /opt/video-viewer
 sh deployment/scripts/enable-https.sh
 ```
 
-Сертификат находится в `/etc/letsencrypt/live/bogdanova34.ru/`. `certbot.timer` проверяет необходимость продления; deploy hook `deployment/scripts/renew-certificate.sh` проверяет nginx и выполняет reload после успешного обновления. При начальном ожидании DNS `video-viewer-https.timer` запускает проверку раз в 30 минут; после успешного включения HTTPS создаётся `.runtime/https-ready`, и service пропускается. Если выпуск прошёл, а reload завершился ошибкой, следующая попытка повторит включение HTTPS. Таймеры настроены на запуск после перезагрузки.
+При смене домена сначала соберите новый образ. Скрипт выпускает сертификат, затем применяет PUBLIC_ORIGIN из production Compose и переключает nginx. Пока DNS нового адреса недоступен, прежний запущенный сайт может продолжать работать. Пользователи и сетки остаются в тех же данных; на новом домене нужно войти заново.
+
+Сертификат находится в `/etc/letsencrypt/live/bogdanova34-portal/`. `certbot.timer` проверяет необходимость продления; deploy hook `deployment/scripts/renew-certificate.sh` проверяет nginx и выполняет reload после успешного обновления. При начальном ожидании DNS `video-viewer-https.timer` запускает проверку раз в 30 минут; после успешного включения HTTPS создаётся `.runtime/https-ready-bogdanova34-portal`, и service пропускается. Общий сертификат покрывает оба адреса. Прежний маркер другого сертификата не блокирует его выпуск. Если выпуск прошёл, а reload завершился ошибкой, следующая попытка повторит включение HTTPS. Таймеры настроены на запуск после перезагрузки.
 
 ```sh
 systemctl list-timers --all certbot.timer video-viewer-https.timer

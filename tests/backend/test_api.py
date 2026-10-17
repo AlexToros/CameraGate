@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from aiohttp import CookieJar, WSMsgType
+from aiohttp import CookieJar, WSMsgType, WSServerHandshakeError
 from aiohttp.test_utils import TestClient, TestServer
 from backend.server import create_app, COOKIE, Portal
 from backend.store import Problem
@@ -170,6 +170,35 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             response = await self.client.get('/icon-192.png')
             self.assertEqual(response.status, 200)
             self.assertTrue((await response.read()).startswith(b'\x89PNG'))
+
+    async def test_both_domains_have_matching_csp_and_strict_origin_checks(self):
+        config = {'PUBLIC_ORIGIN':'https://bogdanova34.site',
+                  'ADDITIONAL_PUBLIC_ORIGINS':'https://bogdanova34.ru'}
+        with patch.dict('os.environ', config):
+            for host in ('bogdanova34.site', 'bogdanova34.ru'):
+                response = await self.client.get('/api/me', headers={'Host':host, 'Origin':'https://'+host})
+                self.assertEqual(response.status, 200)
+                self.assertIn('wss://'+host, response.headers['Content-Security-Policy'])
+            response = await self.client.get('/api/me', headers={
+                'Host':'bogdanova34.ru', 'Origin':'https://bogdanova34.site'})
+            self.assertEqual(response.status, 403)
+            response = await self.client.get('/api/me', headers={
+                'Host':'evil.example', 'Origin':'https://bogdanova34.site'})
+            self.assertEqual(response.status, 403)
+
+    async def test_websocket_works_on_both_hosts_but_rejects_cross_domain_origin(self):
+        config = {'PUBLIC_ORIGIN':'https://bogdanova34.site',
+                  'ADDITIONAL_PUBLIC_ORIGINS':'https://bogdanova34.ru'}
+        with patch.dict('os.environ', config):
+            for host in ('bogdanova34.site', 'bogdanova34.ru'):
+                ws = await self.client.ws_connect('/api/live', headers={'Host':host, 'Origin':'https://'+host})
+                await ws.send_json({'csrf':self.me['csrf'], 'camera_ids':[1]})
+                self.assertEqual(set((await ws.receive_json(timeout=3))['cameras']), {'1'})
+                await ws.close()
+            with self.assertRaises(WSServerHandshakeError) as error:
+                await self.client.ws_connect('/api/live', headers={
+                    'Host':'bogdanova34.ru', 'Origin':'https://bogdanova34.site'})
+            self.assertEqual(error.exception.status, 403)
 
 
 if __name__ == '__main__':

@@ -21,6 +21,21 @@ LOG = logging.getLogger('portal')
 PORTAL = web.AppKey('portal', object)
 
 
+def public_origins():
+    primary = os.environ.get('PUBLIC_ORIGIN')
+    if not primary:
+        return []
+    additional = os.environ.get('ADDITIONAL_PUBLIC_ORIGINS', '')
+    return [primary, *(origin.strip() for origin in additional.split(',') if origin.strip())]
+
+
+def request_origin(request):
+    origins = public_origins()
+    host = request.host.lower()
+    return next((origin for origin in origins if urlsplit(origin).netloc.lower() == host),
+                origins[0] if origins else '%s://%s' % (request.scheme, request.host))
+
+
 class Portal:
     def __init__(self, store, streams, secure=False):
         self.store, self.streams, self.secure = store, streams, secure
@@ -40,7 +55,7 @@ class Portal:
 
     def origin(self, request):
         origin = request.headers.get('Origin')
-        expected = os.environ.get('PUBLIC_ORIGIN') or '%s://%s' % (request.scheme,request.host)
+        expected = request_origin(request)
         if origin and origin != expected:
             raise Problem('Запрос с другого сайта запрещён', 403)
         if request.headers.get('Sec-Fetch-Site') == 'cross-site':
@@ -256,8 +271,7 @@ def numeric_tail(path):
 async def errors(request, handler):
     try:
         allowed = {'localhost','127.0.0.1','::1'}
-        if os.environ.get('PUBLIC_ORIGIN'):
-            allowed.add(urlsplit(os.environ['PUBLIC_ORIGIN']).hostname)
+        allowed.update(urlsplit(origin).hostname for origin in public_origins())
         if urlsplit('//'+request.host).hostname not in allowed:
             raise Problem('Неизвестный адрес сервиса',403)
         response = await handler(request)
@@ -270,7 +284,7 @@ async def errors(request, handler):
         LOG.error('request_failed method=%s path=%s',request.method,request.path)
         response = web.json_response({'error':'Не удалось выполнить запрос. Повторите позже'},status=500)
     if not response.prepared:
-        public = urlsplit(os.environ.get('PUBLIC_ORIGIN') or '%s://%s' % (request.scheme,request.host))
+        public = urlsplit(request_origin(request))
         websocket_origin = ('wss' if public.scheme=='https' else 'ws')+'://'+public.netloc
         response.headers.update({'Cache-Control':'no-store', 'X-Content-Type-Options':'nosniff',
             'Referrer-Policy':'no-referrer','X-Frame-Options':'DENY',

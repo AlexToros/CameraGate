@@ -26,7 +26,8 @@ services:
     environment:
       DATABASE_URL: postgresql://viewer@db:5432/video_viewer
       DB_PASSWORD_FILE: /run/secrets/db_password
-      PUBLIC_ORIGIN: https://bogdanova34.ru
+      PUBLIC_ORIGIN: https://bogdanova34.site
+      ADDITIONAL_PUBLIC_ORIGINS: https://bogdanova34.ru
       COOKIE_SECURE: '1'
       TRUST_PROXY: '1'
       CAMERA_SDK_PATH: /vendor/libxmnetsdk.so
