@@ -5,7 +5,8 @@ self.addEventListener("install", event => {
   event.waitUntil(caches.open(SHELL).then(cache => cache.addAll(FILES)).then(() => self.skipWaiting()));
 });
 self.addEventListener("activate", event => {
-  event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key.startsWith("camera-shell-") && key !== SHELL).map(key => caches.delete(key)))).then(() => self.clients.claim()));
+  // Reuse one shell cache across releases; install.addAll refreshes it atomically.
+  event.waitUntil(self.clients.claim());
 });
 self.addEventListener("fetch", event => {
   const url = new URL(event.request.url);

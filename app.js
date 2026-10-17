@@ -8,7 +8,9 @@ const roleName = role => role === "admin" ? "Администратор" : "По
 const uid = () => crypto.randomUUID().replaceAll("-", "");
 function toast(message) { const box = document.querySelector("#notice"); box.textContent = message; box.classList.add("visible"); clearTimeout(box.timer); box.timer = setTimeout(() => box.classList.remove("visible"), 4500); }
 async function api(path, method = "GET", data) {
-  const response = await fetch(path, {method, credentials:"same-origin", cache:"no-store", headers:{"Content-Type":"application/json", ...(csrf ? {"X-CSRF-Token":csrf} : {})}, ...(data === undefined ? {} : {body:JSON.stringify(data)})});
+  let response;
+  try { response = await fetch(path, {method, credentials:"same-origin", cache:"no-store", headers:{"Content-Type":"application/json", ...(csrf ? {"X-CSRF-Token":csrf} : {})}, ...(data === undefined ? {} : {body:JSON.stringify(data)})}); }
+  catch { const error = new Error("Нет связи с сервером. Проверьте подключение к сети и повторите попытку."); error.network = true; throw error; }
   let result;
   try { result = await response.json(); } catch { throw new Error("Сервис временно недоступен"); }
   if (!response.ok) { const error = new Error(result.error || "Не удалось выполнить запрос"); error.status = response.status; if (response.status === 401 && me && path !== "/api/auth/login") signedOut(result.error); throw error; }
@@ -28,7 +30,7 @@ function stopVideo() { clearTimeout(reconnectTimer); socketEpoch++; if(socket) s
 function signedOut(message) { me = null; csrf = null; state = null; clearInterval(refreshTimer); clearTimeout(saveTimer); stopVideo(); if(modal.open) modal.close(); authView("login", null, message); }
 function authView(mode, invitation, message = "") {
   const setup = mode === "setup", invite = mode === "invite";
-  root.innerHTML = `<main class="auth"><div class="brand-mark" aria-hidden="true">▦</div><h1>${setup ? "Первый администратор" : invite ? "Вас пригласили" : "Домовые камеры"}</h1><p class="muted">${setup ? "Создайте учётную запись, чтобы настроить доступ к камерам." : invite ? `${h(invitation.last_name)} ${h(invitation.first_name)}<br>${roleName(invitation.role)}. Осталось выбрать логин и пароль.` : "Войдите, чтобы открыть свою видеостену."}</p><form class="stack" id="auth-form">${setup ? `<div class="two"><label>Фамилия<input name="last_name" autocomplete="family-name" required maxlength="100"></label><label>Имя<input name="first_name" autocomplete="given-name" required maxlength="100"></label></div>` : ""}<label>Логин<input name="login" autocomplete="username" autocapitalize="none" spellcheck="false" pattern="[A-Za-z0-9._-]{3,64}" minlength="3" maxlength="64" required></label><label>Пароль<input name="password" type="password" autocomplete="${mode === "login" ? "current-password" : "new-password"}" ${mode === "login" ? "" : "minlength=12"} maxlength="128" required></label>${mode !== "login" ? "<small>От 12 символов. Сохраните пароль в менеджере паролей.</small>" : ""}<div class="error" role="alert">${h(message)}</div><button class="primary" type="submit">${setup ? "Создать администратора" : invite ? "Создать учётную запись" : "Войти"}</button></form><div class="install-help">Доступ выдаёт администратор по приглашению. <button id="install" type="button">Установить приложение</button></div></main>`;
+  root.innerHTML = `<main class="auth"><div class="brand-mark" aria-hidden="true">▦</div><h1>${setup ? "Первый администратор" : invite ? "Вас пригласили" : "Домовые камеры"}</h1><p class="muted">${setup ? "Создайте учётную запись, чтобы настроить доступ к камерам." : invite ? `${h(invitation.last_name)} ${h(invitation.first_name)}<br>${roleName(invitation.role)}. Осталось выбрать логин и пароль.` : "Войдите, чтобы открыть свою видеостену."}</p><form class="stack" id="auth-form">${setup ? `<div class="two"><label>Фамилия<input name="last_name" autocomplete="family-name" required maxlength="100"></label><label>Имя<input name="first_name" autocomplete="given-name" required maxlength="100"></label></div>` : ""}<label>Логин<input name="login" autocomplete="username" autocapitalize="none" spellcheck="false" pattern="[A-Za-z0-9._\\-]{3,64}" minlength="3" maxlength="64" required></label><label>Пароль<input name="password" type="password" autocomplete="${mode === "login" ? "current-password" : "new-password"}" ${mode === "login" ? "" : "minlength=12"} maxlength="128" required></label>${mode !== "login" ? "<small>От 12 символов. Сохраните пароль в менеджере паролей.</small>" : ""}<div class="error" role="alert">${h(message)}</div><button class="primary" type="submit">${setup ? "Создать администратора" : invite ? "Создать учётную запись" : "Войти"}</button></form><div class="install-help">Доступ выдаёт администратор по приглашению. <button id="install" type="button">Установить приложение</button></div></main>`;
   bindForm(document.querySelector("#auth-form"), async data => {
     await api(`/api/auth/${setup ? "setup" : invite ? "register" : "login"}`, "POST", {...data, ...(invite ? {token:invitation.token} : {})});
     history.replaceState(null, "", "/"); await enter();
@@ -46,7 +48,7 @@ async function boot() {
     const bootstrap = await api("/api/bootstrap");
     if(bootstrap.setup_required) authView("setup");
     else { try { await enter(); } catch(e) { if(e.status === 401) authView("login"); else throw e; } }
-  } catch(e) { root.innerHTML = `<main class="auth"><div class="brand-mark">▦</div><h1>${navigator.onLine ? "Не удалось открыть приложение" : "Нет подключения к сети"}</h1><p>${h(navigator.onLine ? e.message : "Для входа и просмотра камер нужен интернет. Ваши настройки сохранены на сервере.")}</p><button id="retry" class="primary">Повторить</button><p class="install-help"><a href="/">Перейти ко входу</a></p></main>`; document.querySelector("#retry").onclick = boot; }
+  } catch(e) { const offline = e.network || !navigator.onLine; root.innerHTML = `<main class="auth"><div class="brand-mark">▦</div><h1>${offline ? "Нет связи с сервером" : "Не удалось открыть приложение"}</h1><p>${h(offline ? "Для входа и просмотра камер нужен интернет и доступ к серверу. Проверьте соединение. Ваши настройки сохранены на сервере." : e.message)}</p><button id="retry" class="primary">Повторить</button><p class="install-help"><a href="/">Перейти ко входу</a></p></main>`; document.querySelector("#retry").onclick = boot; }
 }
 async function enter() { const result = await api("/api/me"); me = result.user; csrf = result.csrf; state = await api("/api/state"); page = "wall"; render(); clearInterval(refreshTimer); refreshTimer = setInterval(refresh, 15000); }
 async function refresh() {
@@ -84,12 +86,16 @@ function wall() {
 }
 function renderTiles() {
   const wall = document.querySelector("#wall"); if(!wall) return;
-  wall.style.setProperty("--columns",state.layout.columns);
+  const columns = innerWidth <= 760 ? Math.min(state.layout.columns,Math.max(1,Math.floor((innerWidth-24)/145))) : state.layout.columns;
+  wall.style.setProperty("--columns",columns);
+  let fit = document.querySelector("#grid-fit");
+  if(!fit) { fit = document.createElement("div"); fit.id = "grid-fit"; fit.className = "save-status"; document.querySelector("#save-state").after(fit); }
+  fit.textContent = columns !== state.layout.columns ? `На этом экране — ${columns} колонки. Сохранено: ${state.layout.columns}.` : "";
   wall.innerHTML = state.layout.tiles.length ? state.layout.tiles.map((tile,index) => `<article class="tile" data-tile="${h(tile.id)}"><div class="tile-head"><span class="grip" draggable="true" title="Перетащить экран">⠿</span><select aria-label="Камера экрана ${index+1}"><option value="">Выбрать камеру</option>${state.cameras.map(c => `<option value="${c.id}" ${tile.camera_id === c.id ? "selected" : ""}>${h(c.name)}</option>`).join("")}</select><button data-size title="Размер и положение экрана" aria-label="Размер и положение экрана ${index+1}">⤢</button><button data-remove title="Удалить экран" aria-label="Удалить экран ${index+1}">×</button></div><div class="picture"><img alt="" hidden><span class="stream-state">${tile.camera_id ? "Подключение…" : "Выберите камеру для этого экрана"}</span><span class="live-label">Прямой эфир</span></div></article>`).join("") : `<div class="empty">Добавьте экран или выберите быструю сетку.</div>`;
   const tilesById = new Map(state.layout.tiles.map(t => [t.id,t]));
   wall.querySelectorAll(".tile").forEach(element => {
     const tile = tilesById.get(element.dataset.tile);
-    element.style.setProperty("--width",Math.min(tile.width,state.layout.columns)); element.style.setProperty("--height",tile.height);
+    element.style.setProperty("--width",Math.min(tile.width,columns)); element.style.setProperty("--height",tile.height);
     element.querySelector("select").onchange = event => { tile.camera_id = +event.target.value || null; clearTile(element); changed(); subscribe(); drawCached(tile,element); };
     element.querySelector("[data-remove]").onclick = () => { state.layout.tiles = state.layout.tiles.filter(t => t.id !== tile.id); renderTiles(); changed(); subscribe(); };
     element.querySelector("[data-size]").onclick = () => tileOptions(tile);
@@ -103,7 +109,8 @@ function renderTiles() {
 }
 function tileOptions(tile) {
   const position = state.layout.tiles.indexOf(tile)+1;
-  dialog("Размер и положение",`<form class="stack"><div class="two"><label>Ширина, колонок<select name="width">${Array.from({length:12},(_,i) => `<option ${tile.width === i+1 ? "selected" : ""}>${i+1}</option>`).join("")}</select></label><label>Высота, строк<select name="height">${Array.from({length:6},(_,i) => `<option ${tile.height === i+1 ? "selected" : ""}>${i+1}</option>`).join("")}</select></label></div><label>Позиция на стене<select name="position">${state.layout.tiles.map((_,i) => `<option ${position === i+1 ? "selected" : ""}>${i+1}</option>`).join("")}</select></label><p class="muted">На узком экране ширина ограничивается числом колонок.</p><div class="error"></div><button type="submit" class="primary">Применить</button></form>`);
+  dialog("Размер и положение",`<form class="stack"><div class="two"><label>Ширина, колонок<select name="width">${Array.from({length:12},(_,i) => `<option ${tile.width === i+1 ? "selected" : ""}>${i+1}</option>`).join("")}</select></label><label>Высота, строк<select name="height">${Array.from({length:6},(_,i) => `<option ${tile.height === i+1 ? "selected" : ""}>${i+1}</option>`).join("")}</select></label></div><label>Позиция на стене<select name="position">${state.layout.tiles.map((_,i) => `<option ${position === i+1 ? "selected" : ""}>${i+1}</option>`).join("")}</select></label><p class="muted">На узком экране ширина ограничивается числом колонок.</p><div class="error"></div><div class="actions"><button type="button" id="remove-current-tile" class="danger">Удалить экран</button><button type="submit" class="primary">Применить</button></div></form>`);
+  modal.querySelector("#remove-current-tile").onclick = () => { state.layout.tiles = state.layout.tiles.filter(t => t.id !== tile.id); modal.close(); renderTiles(); changed(); subscribe(); };
   bindForm(modal.querySelector("form"), data => { tile.width = +data.width; tile.height = +data.height; const index = state.layout.tiles.indexOf(tile); state.layout.tiles.splice(index,1); state.layout.tiles.splice(+data.position-1,0,tile); modal.close(); renderTiles(); changed(); });
 }
 function changed() { draftVersion++; const label = document.querySelector("#save-state"); if(label) label.textContent = "Сохраняем…"; clearTimeout(saveTimer); saveTimer = setTimeout(save,500); }
@@ -114,12 +121,12 @@ function save() {
   return saving;
 }
 async function flushSave() { if(saveTimer) { clearTimeout(saveTimer); saveTimer = null; return save(); } return saving; }
-function clearTile(element) { element.classList.remove("live"); const image = element.querySelector("img"); image.onload = null; image.hidden = true; image.removeAttribute("src"); element.querySelector(".stream-state").textContent = "Подключение…"; }
+function clearTile(element) { element.classList.remove("live"); const image = element.querySelector("img"), replacement = new Image(); replacement.alt = ""; replacement.hidden = true; image.onload = null; image.removeAttribute("src"); image.replaceWith(replacement); element.querySelector(".stream-state").textContent = "Подключение…"; }
 function drawCached(tile, element) {
   const cached = images.get(tile.camera_id);
   if(!cached || Date.now()-cached.at>5000) return;
   const image = element.querySelector("img"), expectedCamera = tile.camera_id, expectedURL = cached.url;
-  image.onload = () => { if(tile.camera_id === expectedCamera && images.get(expectedCamera)?.url === expectedURL && element.isConnected) { image.hidden = false; element.classList.add("live"); } };
+  image.onload = () => { if(tile.camera_id === expectedCamera && image.src === expectedURL && element.isConnected && element.querySelector("img") === image) { image.hidden = false; element.classList.add("live"); } };
   image.src = expectedURL;
 }
 function subscriptions() { return [...new Set(state.layout.tiles.map(t => t.camera_id).filter(Boolean))]; }
@@ -173,7 +180,7 @@ async function admin() {
       body.querySelector("#new-group").onclick = () => groupForm(); const groups = new Map(state.groups.map(g => [g.id,g])); body.querySelectorAll("[data-group]").forEach(button => button.onclick = () => groupForm(groups.get(+button.dataset.group)));
     } else if(tab === "cameras") {
       body.innerHTML = `<div class="row between"><h2>Названия камер</h2><button id="sync">Обновить список камер</button></div><p class="muted">Эти названия будут видны всем пользователям.</p><form class="stack form-limit"><div class="camera-names">${state.cameras.map(c => `<label class="camera-name"><span>Канал ${c.id}</span><input name="camera_${c.id}" value="${h(c.name)}" required maxlength="120" aria-label="Имя камеры ${c.id}"></label>`).join("") || `<p>${h(state.connection_state)}</p>`}</div><div class="error"></div><button type="submit" class="primary">Сохранить названия</button></form>`;
-      body.querySelector("#sync").onclick = async () => { try { await api("/api/admin/sync","POST",{}); toast("Обновляем список. Это может занять до 45 секунд."); } catch(e) { toast(e.message); } };
+      body.querySelector("#sync").onclick = async () => { try { await api("/api/admin/sync","POST",{}); toast("Обновляем список. Это может занять пару минут."); } catch(e) { toast(e.message); } };
       bindForm(body.querySelector("form"), async data => { await api("/api/admin/cameras","PUT",{cameras:state.cameras.map(c => ({id:c.id,name:data[`camera_${c.id}`]}))}); state.cameras = (await api("/api/state")).cameras; toast("Названия сохранены"); });
     } else if(tab === "connection") {
       const connection = await api("/api/admin/connection"); if(!body.isConnected || tab !== adminTab) return;
@@ -201,5 +208,7 @@ window.addEventListener("offline", () => { toast("Нет сети. Эфир во
 window.addEventListener("online", () => { if(me) { refresh(); connectVideo(); } else boot(); });
 document.addEventListener("visibilitychange", () => { if(document.hidden) { flushSave(); stopVideo(); } else if(me && page === "wall") { refresh(); connectVideo(); } });
 document.addEventListener("fullscreenchange", () => { if(!document.fullscreenElement) document.body.classList.remove("fullscreen"); });
+let resizeTimer;
+window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if(me && page === "wall") renderTiles(); },150); });
 if("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
 boot();
