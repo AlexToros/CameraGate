@@ -16,6 +16,21 @@
 - The built-in group «Все камеры» always contains all cameras. Administrators implicitly have access to it.
 - Device connection settings (ID, UserName, Password) are write-only in the API/UI. Missing settings produce a useful viewer error.
 - Blocking and permission changes must affect existing sessions and active streams, not only new requests.
+- PostgreSQL in all environments; do not introduce SQLite. Keep Docker Compose and nginx configuration for later deployment, but simplify the local preview.
+- Installable PWA is required. Finish core flows first, then verify responsive layouts and touch controls. Never cache authenticated API responses or video in the service worker.
+
+## Portal architecture
+
+- `server.py`: aiohttp HTTP/API and one multiplexed WebSocket per browser. Bind loopback locally. PUBLIC_ORIGIN/COOKIE_SECURE configure a future HTTPS entrypoint.
+- `store.py`, `schema.sql`: PostgreSQL 17, transactional bootstrap/invitations, server sessions, ACL snapshots and saved per-user grids. Passwords use salted PBKDF2; upstream credentials use Fernet with a separate runtime key.
+- Initial SQL is idempotent; introduce versioned migrations before changing an already deployed schema.
+- Active users/rights/sessions are an in-memory bulk snapshot, refreshed atomically after mutations. This currently requires one portal process; replicas require shared invalidation and source coordination.
+- `streams.py`: one lazy shared producer per unique camera; frames stay in memory. Stop unused producers. Do not duplicate upstream connections per viewer/tile.
+- `vesta.py` owns only the native transport/decoder. Credentials enter worker stdin, never command-line arguments. Native media workers skip redundant catalog queries; catalog discovery is separate.
+- `gateway.py` and `gateway_client.py`: optional token-authenticated media worker for a Linux portal container. Browser access to the gateway is forbidden. Full Linux camera transport remains a separate prerequisite; macOS dylib is not portable.
+- `app.js`, `style.css`: vanilla UI, wall presets/custom sizes/reordering, administration. Mobile layout may reduce visible columns without changing the saved layout. Keyboard/touch reordering is available in the tile-size dialog.
+- Manifest/icons/service worker implement PWA. Only public app-shell assets may enter CacheStorage. Phone installation requires trusted HTTPS; desktop localhost works for local preview.
+- `compose.yaml`: PostgreSQL, portal and nginx, persistent DB/key volumes, file secrets. Only nginx publishes a loopback port. No VPS deployment is authorized.
 
 ## Existing video transport
 
@@ -27,14 +42,18 @@
 - SDK send length includes a 12-byte transport envelope. Start-monitor does not necessarily return an acknowledgement.
 - Each stream must isolate stale frames by generation. The browser must wait for the actual new image before revealing it.
 - Do not confuse SDK connection caching with web caching. Disabling the old SDK cache was a compatibility workaround, not a proven speed optimization.
+- Dynamic P2P discovery remains the default. An operator may override it with `P2P_SERVER` or ignored `.runtime/p2p-server` when a discovered node cannot reach the recorder. Public node addresses can change; never bake one into the source.
 
 ## Validation
 
-- `python3 -m unittest -v test_protocol.py` verifies the existing transport framing and recovery behavior.
-- Add focused authorization, invitation-consumption, permission-revocation and layout-persistence tests with the portal.
-- Exercise the UI in Chromium, including a delayed-image race and multiple camera tiles.
+- `.runtime/venv/bin/python -m unittest -v test_protocol.py test_store.py test_api.py test_gateway.py`; PostgreSQL suites require TEST_DATABASE_URL and use disposable schemas.
+- Verify authorization, concurrent bootstrap/invite consumption, active stream revocation/blocking and layout persistence against real PostgreSQL.
+- Exercise Chromium desktop/mobile and real streams separately. Artificial image fixtures prove UI/ACL behavior, not real camera availability.
+- Keep CSP enabled during product validation. Playwright waitForFunction uses eval and conflicts with CSP; use locators/polling instead of weakening product policy.
+- `node --check app.js`, `node --check sw.js`, `docker compose config --quiet`.
 
 ## Current state
 
-- Baseline recorded before implementing the local authenticated portal.
-- Local camera server is stopped. The VPS was cleared of GRACE and is not part of this implementation.
+- Local portal implemented with PostgreSQL/PWA; first real administrator is deliberately left for the user to create.
+- Docker configuration is prepared; Docker daemon was stopped during development, so container build/run is not yet verified.
+- The VPS was cleared of GRACE in earlier work and is not part of this implementation.

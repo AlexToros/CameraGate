@@ -15,4 +15,8 @@ if [ ! -f .runtime/libnetsdk.dylib ]; then
   rm .runtime/vesta.rar .runtime/VMS_VeSta_MACOS_V1.21.0.2.T.20210202.dmg
 fi
 uv pip install --python /usr/bin/python3 --target .runtime/packages imageio-ffmpeg==0.6.0
+if [ ! -x .runtime/venv/bin/python ]; then
+  uv venv --python 3.14 .runtime/venv
+fi
+uv pip install --python .runtime/venv/bin/python -r requirements.txt
 echo 'Готово. Запуск: sh start.sh'

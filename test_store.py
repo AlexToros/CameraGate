@@ -60,6 +60,27 @@ class DatabaseCase(unittest.TestCase):
 
 
 class StoreTests(DatabaseCase):
+    def test_acl_bulk_query_count_does_not_grow_with_users_or_cameras(self):
+        admin,_ = self.admin()
+        self.store.sync_cameras(['Camera '+str(i) for i in range(100)])
+        class Counted:
+            def __init__(self,conn):
+                self.conn,self.calls = conn,0
+            def execute(self,*args,**kwargs):
+                self.calls += 1
+                return self.conn.execute(*args,**kwargs)
+        with self.store.pool.connection() as conn:
+            counted = Counted(conn)
+            self.store._snapshot(counted)
+            first = counted.calls
+            conn.execute("INSERT INTO users(login,password_hash,first_name,last_name,role,group_ids) SELECT 'bulk-user-'||n,password_hash,'Test','User','user',ARRAY[1] FROM users CROSS JOIN generate_series(1,20) n WHERE id=%s",(admin['id'],))
+            counted.calls = 0
+            snapshot = self.store._snapshot(counted)
+            self.assertEqual(counted.calls,first)
+            self.assertEqual(counted.calls,4)
+            self.assertEqual(len(snapshot['users']),21)
+            self.assertTrue(all(u['mask'].bit_count()==100 for u in snapshot['users'].values()))
+
     def test_bootstrap_race_and_password_storage(self):
         def create(i):
             try:

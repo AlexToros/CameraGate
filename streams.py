@@ -37,6 +37,7 @@ class Source:
         self.cid, self.config = cid, config
         self.jpeg, self.frame_id, self.last_frame = None, 0, 0
         self.state = 'Подключение к камере…'
+        self.diagnostics = {}
         self.touched = time.monotonic()
         self.process = None
         self.task = asyncio.create_task(self.run())
@@ -61,6 +62,7 @@ class Source:
                         if meta['selected'] != self.cid-1 or meta['generation'] != 1:
                             continue
                         self.state = meta['state']
+                        self.diagnostics = meta.get('diagnostics',{})
                         if jpeg and meta.get('frame_generation') == 1:
                             self.jpeg, self.last_frame = jpeg, time.monotonic()
                             self.frame_id += 1

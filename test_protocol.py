@@ -128,6 +128,20 @@ class RecoveryTests(unittest.TestCase):
         transport.close.assert_called_once()
         self.assertIsNone(viewer.decoder)
 
+    def test_fixed_media_worker_does_not_repeat_catalog_query(self):
+        transport = Mock()
+        transport.login.return_value = {'ChannelNum': 36, 'AliveInterval': 21}
+        viewer = Viewer({'SERIAL_NUM':'placeholder'})
+        viewer.catalog_required = False
+        with patch('vesta.discover',return_value='127.0.0.1'), \
+             patch('vesta.Transport',return_value=transport), \
+             patch('vesta.frame_health',return_value='media_timeout'):
+            viewer.run()
+        transport.request.assert_not_called()
+        transport.login.assert_called_once()
+        self.assertEqual(len(viewer.channels),36)
+        transport.close.assert_called_once()
+
     def test_hung_worker_is_killed_if_it_ignores_termination(self):
         viewer = IsolatedViewer()
         viewer.child = Mock()

@@ -263,9 +263,11 @@ async def errors(request, handler):
         LOG.error('request_failed method=%s path=%s',request.method,request.path)
         response = web.json_response({'error':'Не удалось выполнить запрос. Повторите позже'},status=500)
     if not response.prepared:
+        public = urlsplit(os.environ.get('PUBLIC_ORIGIN') or '%s://%s' % (request.scheme,request.host))
+        websocket_origin = ('wss' if public.scheme=='https' else 'ws')+'://'+public.netloc
         response.headers.update({'Cache-Control':'no-store', 'X-Content-Type-Options':'nosniff',
             'Referrer-Policy':'no-referrer','X-Frame-Options':'DENY',
-            'Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"})
+            'Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self' %s; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'" % websocket_origin})
     return response
 
 
@@ -303,7 +305,7 @@ def create_app(store, streams=None, secure=False, auto_sync=True):
 
 def main():
     data_dir = Path(os.environ.get('DATA_DIR',ROOT/'.runtime/data'))
-    dsn = os.environ.get('DATABASE_URL','postgresql://localhost:55432/video_viewer?host='+str(ROOT/'.runtime/pgsocket'))
+    dsn = os.environ.get('DATABASE_URL','postgresql://viewer@localhost:55432/video_viewer?host='+str(ROOT/'.runtime/pgsocket'))
     if os.environ.get('DB_PASSWORD_FILE'):
         from psycopg.conninfo import make_conninfo
         dsn = make_conninfo(dsn,password=Path(os.environ['DB_PASSWORD_FILE']).read_text().strip())

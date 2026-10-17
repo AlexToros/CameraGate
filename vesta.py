@@ -3,7 +3,6 @@ import ctypes as C
 import hashlib
 import json
 import logging
-from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
 import queue
@@ -15,13 +14,10 @@ import sys
 import threading
 import time
 import uuid
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlsplit
 
 ROOT = Path(__file__).resolve().parent
 HEADER = struct.Struct('<BB2xIIBBHI')
 OUT = sys.stdout
-PORT = int(os.environ.get('VIEWER_PORT', '8080'))
 LOG = logging.getLogger('viewer')
 SERVER_ID = uuid.uuid4().hex
 
@@ -73,6 +69,15 @@ def credentials():
 
 
 def discover():
+    # Optional operator override for a P2P node that can reach this recorder.
+    # Keep the default dynamic discovery; do not bake a transient public IP into code.
+    override = os.environ.get('P2P_SERVER')
+    node_file = ROOT / '.runtime/p2p-server'
+    if not override and node_file.exists():
+        override = node_file.read_text().strip()
+    if override:
+        socket.inet_aton(override)
+        return override
     request = (struct.pack('<I', 0x05f42014) + b'123456787890ab\0').ljust(104, b'\0')
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         sock.settimeout(5)
@@ -305,6 +310,7 @@ class Frames:
 class Viewer:
     def __init__(self, config=None):
         self.config = config
+        self.catalog_required = True
         self.condition = threading.Condition()
         self.stop = threading.Event()
         self.wakeup = threading.Event()
@@ -482,8 +488,12 @@ class Viewer:
                 info = transport.login(config)
                 self.mark('authenticated')
                 self.update('Получение списка камер…')
-                _, titles = transport.request(1048, transport.command('ChannelTitle'))
-                names = titles.get('ChannelTitle', [])
+                if self.catalog_required:
+                    _, titles = transport.request(1048, transport.command('ChannelTitle'))
+                    names = titles.get('ChannelTitle', [])
+                else:
+                    # The portal loads the catalog once, separately from media.
+                    names = []
                 self.mark('channels_loaded')
                 with self.condition:
                     self.channels = [str(names[i]) if i < len(names) else 'Камера %d' % (i + 1)
@@ -714,6 +724,7 @@ def worker_main():
     os.close(null)
     initial = json.loads(sys.stdin.buffer.readline(16384))
     viewer = Viewer(initial.get('config'))
+    viewer.catalog_required = False
     viewer.selected = int(sys.argv[2])
     viewer.generation = int(sys.argv[3])
     def stop(*_):
@@ -791,10 +802,14 @@ def catalog_main():
     os.dup2(null, 1)
     os.dup2(null, 2)
     os.close(null)
+    stage = 'configuration'
     try:
         config = json.loads(sys.stdin.buffer.readline(16384))
+        stage = 'transport'
         transport = Transport(discover(), config['SERIAL_NUM'])
+        stage = 'login'
         info = transport.login(config)
+        stage = 'catalog'
         _, result = transport.request(1048, transport.command('ChannelTitle'))
         names = result.get('ChannelTitle', [])
         count = max(0, min(int(info['ChannelNum']), 256))
@@ -804,7 +819,7 @@ def catalog_main():
         os._exit(0)
     except Exception as error:
         # Only the exception type, never native messages or configuration.
-        pipe.write(json.dumps({'error_type': type(error).__name__}) + '\n')
+        pipe.write(json.dumps({'error_type': type(error).__name__, 'stage':stage}) + '\n')
         pipe.flush()
         os._exit(1)
 
