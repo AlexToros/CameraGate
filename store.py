@@ -42,8 +42,8 @@ def login_name(value):
 
 
 def password_hash(password):
-    if not isinstance(password, str) or not 12 <= len(password) <= 128:
-        raise Problem('Пароль должен содержать от 12 до 128 символов')
+    if not isinstance(password, str) or not 6 <= len(password) <= 128:
+        raise Problem('Пароль должен содержать от 6 до 128 символов')
     salt = secrets.token_hex(16)
     digest = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 600000).hex()
     return 'pbkdf2_sha256$600000$%s$%s' % (salt, digest)
@@ -105,6 +105,7 @@ class Store:
         with self.pool.connection() as conn:
             conn.execute('SELECT pg_advisory_xact_lock(802701)')
             conn.execute((ROOT / 'schema.sql').read_text(), prepare=False)
+            self._prune_invitations(conn)
         self.refresh()
 
     def close(self):
@@ -234,19 +235,25 @@ class Store:
             invite = self._invitation(conn, data.get('token'))
             uid = conn.execute('INSERT INTO users(login,password_hash,first_name,last_name,role,camera_ids,group_ids) VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id',
                                (login, hashed, invite['first_name'], invite['last_name'], invite['role'], invite['camera_ids'], invite['group_ids'])).fetchone()['id']
-            conn.execute('UPDATE invitations SET used_by=%s WHERE id=%s', (uid, invite['id']))
+            conn.execute('DELETE FROM invitations WHERE id=%s', (invite['id'],))
             return self._session(conn, uid)
         return self.mutate(action)
 
     def invitations(self):
-        with self.pool.connection() as conn:
-            rows = conn.execute('SELECT id,first_name,last_name,role,used_by,revoked,created_at::text,expires_at::text FROM invitations ORDER BY id DESC LIMIT 200').fetchall()
-        return rows
+        def action(conn):
+            self._prune_invitations(conn)
+            return conn.execute('SELECT id,first_name,last_name,role,created_at::text,expires_at::text FROM invitations ORDER BY id DESC LIMIT 200').fetchall()
+        return self.mutate(action)
+
+    @staticmethod
+    def _prune_invitations(conn):
+        # Also clean up rows retained by older versions, in one bulk statement.
+        conn.execute('DELETE FROM invitations WHERE used_by IS NOT NULL OR revoked OR expires_at<=now()')
 
     def revoke_invite(self, actor, iid):
         def action(conn):
             self._admin(conn, actor)
-            conn.execute('UPDATE invitations SET revoked=true WHERE id=%s', (iid,))
+            conn.execute('DELETE FROM invitations WHERE id=%s', (iid,))
         self.mutate(action)
 
     def edit_user(self, actor, uid, data):

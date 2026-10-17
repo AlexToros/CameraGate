@@ -21,6 +21,10 @@
 - Show the install button only on mobile platforms (including iPad desktop UA), and hide it inside the installed app. A narrow desktop window is not a mobile platform.
 - Invitation registration greets the assigned last/first name, explains the login, and asks for login/password/password confirmation. A mismatch must not submit or consume the invite.
 
+- Password minimum is 6 characters, maximum 128, in both forms and backend. Existing users must survive routine restarts.
+- Delete accepted and revoked invitations physically; purge expired/legacy inactive invitations in bulk. Keep only pending invitations in the UI.
+- Keep the wall concise: no wall title, autosave progress/success labels or explanatory grid-fit text. Save silently and show errors when saving fails.
+
 ## Portal architecture
 
 - `server.py`: aiohttp HTTP/API and one multiplexed WebSocket per browser. Bind loopback locally. PUBLIC_ORIGIN/COOKIE_SECURE configure a future HTTPS entrypoint.

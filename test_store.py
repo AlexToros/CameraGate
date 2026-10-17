@@ -12,9 +12,17 @@ import unittest
 
 import psycopg
 from psycopg.conninfo import make_conninfo
-from store import Store, Problem, password_matches
+from store import Store, Problem, password_matches, password_hash
 
-PASSWORD = 'test-password-long-123'
+PASSWORD = 'test12'
+
+
+class PasswordTests(unittest.TestCase):
+    def test_six_character_password_is_accepted_and_five_is_rejected(self):
+        encoded = password_hash(PASSWORD)
+        self.assertTrue(password_matches(PASSWORD,encoded))
+        with self.assertRaises(Problem):
+            password_hash('short')
 
 
 class DatabaseCase(unittest.TestCase):
@@ -60,6 +68,22 @@ class DatabaseCase(unittest.TestCase):
 
 
 class StoreTests(DatabaseCase):
+    def test_only_pending_invitations_remain_in_database(self):
+        admin,_ = self.admin()
+        data = dict(first_name='Test',last_name='Person',role='user')
+        accepted = self.store.invite(admin['id'],data)
+        revoked = self.store.invite(admin['id'],data)
+        expired = self.store.invite(admin['id'],data)
+        pending = self.store.invite(admin['id'],data)
+        token = self.store.register(dict(token=accepted['token'],login='six-char-user',password=PASSWORD))
+        self.assertEqual(self.store.user(token)[0]['login'],'six-char-user')
+        self.store.revoke_invite(admin['id'],revoked['id'])
+        with self.store.pool.connection() as conn:
+            conn.execute("UPDATE invitations SET expires_at=now()-interval '1 day' WHERE id=%s",(expired['id'],))
+        self.assertEqual([i['id'] for i in self.store.invitations()],[pending['id']])
+        with self.store.pool.connection() as conn:
+            self.assertEqual(conn.execute('SELECT count(*) AS n FROM invitations WHERE id=ANY(%s)',([accepted['id'],revoked['id'],expired['id']],)).fetchone()['n'],0)
+
     def test_acl_bulk_query_count_does_not_grow_with_users_or_cameras(self):
         admin,_ = self.admin()
         self.store.sync_cameras(['Camera '+str(i) for i in range(100)])
