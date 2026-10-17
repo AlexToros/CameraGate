@@ -4,6 +4,7 @@ set -eu
 cd "$(dirname "$0")/.."
 [ "$(uname -m)" = x86_64 ] || { echo 'Linux SDK requires x86_64' >&2; exit 1; }
 mkdir -p .runtime
+touch .runtime/p2p-server
 sdk_file=.runtime/libxmnetsdk.so
 sdk_sha=f37d5a36c2223e1e6774208382dd536b71e733c9ca84e6dbdd60a0c4653cd018
 if [ ! -f "$sdk_file" ]; then

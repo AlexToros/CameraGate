@@ -2,6 +2,7 @@
 import asyncio
 from collections import defaultdict, deque
 import hmac
+import ipaddress
 import json
 import logging
 import os
@@ -56,6 +57,12 @@ class Portal:
     def throttle(self, request):
         now = time.monotonic()
         key = request.remote or 'unknown'
+        # Enable only when the app is private behind a proxy that overwrites this header.
+        if os.environ.get('TRUST_PROXY') == '1':
+            try:
+                key = str(ipaddress.ip_address(request.headers.get('X-Real-IP', '')))
+            except ValueError:
+                pass
         if len(self.limits) > 4096:
             self.limits = defaultdict(deque, {k:v for k,v in self.limits.items() if v and v[-1]>now-300})
         attempts = self.limits[key]

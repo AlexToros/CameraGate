@@ -40,6 +40,7 @@
 - Manifest/icons/service worker implement PWA. Only public app-shell assets may enter CacheStorage. Phone installation requires trusted HTTPS; desktop localhost works for local preview.
 - `compose.yaml` keeps the local optional gateway setup. `compose.production.yaml` runs native Linux transport, PostgreSQL and nginx with memory/log limits; only nginx publishes 80/443. Encrypted connection data requires the matching /data/secret.key when migrating the DB. Do not expose initial bootstrap publicly before restoring the existing user database.
 - Production TLS: Certbot webroot /var/www/letsencrypt, HTTP challenge in nginx/acme.conf, nginx/production.conf after issuance. scripts/enable-https.sh installs the deploy hook and enables certbot.timer; scripts/renew-certificate.sh validates and reloads nginx after renewal.
+- TRUST_PROXY=1 is production-only: app has no published port, nginx overwrites X-Real-IP, and login throttles use that validated client IP. Never enable it with direct untrusted access to app. The local optional gateway compose leaves it off.
 
 ## Existing video transport
 

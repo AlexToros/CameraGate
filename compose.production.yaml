@@ -26,12 +26,14 @@ services:
       DB_PASSWORD_FILE: /run/secrets/db_password
       PUBLIC_ORIGIN: https://bogdanova34.ru
       COOKIE_SECURE: '1'
+      TRUST_PROXY: '1'
       CAMERA_SDK_PATH: /vendor/libxmnetsdk.so
       FFMPEG_BINARY: /usr/bin/ffmpeg
     secrets: [db_password]
     volumes:
       - ./.runtime/portal-data:/data
       - ./.runtime/libxmnetsdk.so:/vendor/libxmnetsdk.so:ro
+      - ./.runtime/p2p-server:/app/.runtime/p2p-server:ro
     depends_on:
       db: {condition: service_healthy}
     restart: unless-stopped

@@ -3,11 +3,38 @@ from pathlib import Path
 import time
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from aiohttp import CookieJar, WSMsgType
 from aiohttp.test_utils import TestClient, TestServer
-from server import create_app, COOKIE
+from server import create_app, COOKIE, Portal
+from store import Problem
 from test_store import DatabaseCase, PASSWORD
+
+
+class ProxyThrottleTests(unittest.TestCase):
+    def test_proxy_clients_have_independent_limits(self):
+        portal = Portal(None, None)
+        request = SimpleNamespace(remote='172.20.0.3', headers={'X-Real-IP':'192.0.2.1'})
+        with patch.dict('os.environ', {'TRUST_PROXY':'1'}):
+            for _ in range(20):
+                portal.throttle(request)
+            with self.assertRaises(Problem):
+                portal.throttle(request)
+            request.headers['X-Real-IP'] = '192.0.2.2'
+            portal.throttle(request)
+        self.assertEqual(len(portal.limits), 2)
+
+    def test_untrusted_or_invalid_forwarded_address_cannot_bypass_limit(self):
+        for trusted in ('0', '1'):
+            with self.subTest(trusted=trusted), patch.dict('os.environ', {'TRUST_PROXY':trusted}):
+                portal = Portal(None, None)
+                request = SimpleNamespace(remote='172.20.0.3', headers={})
+                for index in range(20):
+                    request.headers['X-Real-IP'] = f'192.0.2.{index}' if trusted == '0' else f'invalid-{index}'
+                    portal.throttle(request)
+                with self.assertRaises(Problem):
+                    portal.throttle(request)
 
 
 class FakeStreams:
