@@ -1,12 +1,13 @@
 "use strict";
 const root = document.querySelector("#app"), modal = document.querySelector("#modal");
 const h = value => String(value ?? "").replace(/[&<>"\x27]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","\x27":"&#39;"}[c]));
-let me, csrf, state, page = "wall", adminTab = "users", socket, socketEpoch = 0, saveTimer, saving = Promise.resolve(), refreshTimer, installPrompt, reconnectTimer;
+let me, csrf, state, page = "wall", socket, socketEpoch = 0, saveTimer, saving = Promise.resolve(), refreshTimer, installPrompt, reconnectTimer;
 const mediaStreams = new Map();
 const cameraRatios = new Map();
 let tileObserver, cameraFullscreen = null;
 let dragged;
 let routeEpoch = 0;
+let activeLocation = location.hash;
 const roleName = role => role === "admin" ? "Администратор" : "Пользователь";
 const uid = () => crypto.randomUUID().replaceAll("-", "");
 function showInstallButton() {
@@ -31,28 +32,29 @@ function bindForm(form, submit) {
     try { await submit(fields(form)); } catch (e) { if (error) error.textContent = e.message; else toast(e.message); } finally { button.disabled = false; }
   });
 }
-function dialog(title, body) { modal.setAttribute("aria-label",title); modal.innerHTML = `<button class="close" aria-label="Закрыть">×</button><h2>${h(title)}</h2>${body}`; modal.querySelector(".close").onclick = () => modal.close(); modal.showModal(); }
+function dialog(title, body, kind="sheet") { modal.className=`dialog-${kind}`;modal.setAttribute("aria-label",title); modal.innerHTML = `<header class="dialog-head"><h2>${h(title)}</h2><button class="close icon-button" aria-label="Закрыть">×</button></header><div class="dialog-content">${body}</div>`; modal.querySelector(".close").onclick = () => modal.close(); modal.showModal(); }
 modal.addEventListener("click", event => { if (event.target === modal) { const rect = modal.getBoundingClientRect(); if(event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) modal.close(); } });
 function stopVideo() { clearTimeout(reconnectTimer);socketEpoch++;if(socket)socket.close();socket=null;if(cameraFullscreen){cameraFullscreen.classList.remove("video-expanded");if(document.fullscreenElement===cameraFullscreen)document.exitFullscreen().catch(()=>{});cameraFullscreen=null;}for(const stream of mediaStreams.values())stream.destroy();mediaStreams.clear(); }
-function signedOut(message) { routeEpoch++; tileObserver?.disconnect(); me = null; csrf = null; state = null; clearInterval(refreshTimer); clearTimeout(saveTimer); stopVideo(); if(modal.open) modal.close(); authView("login", null, message); }
+function signedOut(message) { adminDraft=null;finishAdminPicker();root.classList.remove("editing");routeEpoch++; tileObserver?.disconnect(); me = null; csrf = null; state = null; clearInterval(refreshTimer); clearTimeout(saveTimer); stopVideo(); if(modal.open) modal.close(); authView("login", null, message); }
 function authView(mode, invitation, message = "") {
   const setup = mode === "setup", invite = mode === "invite";
-  root.innerHTML = `<main class="auth"><div class="brand-mark" aria-hidden="true">▦</div><h1>${setup ? "Первый администратор" : invite ? "Регистрация" : "Домовые камеры"}</h1><p class="muted">${setup ? "Создайте учётную запись, чтобы настроить доступ к камерам." : invite ? `Здравствуйте, ${h(invitation.last_name)} ${h(invitation.first_name)}!<br>Введите логин, который будете использовать для входа, и задайте пароль.` : "Войдите, чтобы открыть свою видеостену."}</p><form class="stack" id="auth-form">${setup ? `<div class="two"><label>Фамилия<input name="last_name" autocomplete="family-name" required maxlength="100"></label><label>Имя<input name="first_name" autocomplete="given-name" required maxlength="100"></label></div>` : ""}<label>Логин<input name="login" autocomplete="username" autocapitalize="none" spellcheck="false" pattern="[A-Za-z0-9._\\-]{3,64}" minlength="3" maxlength="64" required></label><label>Пароль<input name="password" type="password" autocomplete="${mode === "login" ? "current-password" : "new-password"}" ${mode === "login" ? "" : "minlength=6"} maxlength="128" required></label>${mode !== "login" ? `<label>Повторите пароль<input name="password_confirmation" type="password" autocomplete="new-password" minlength="6" maxlength="128" required></label><small>От 6 символов. Сохраните пароль в менеджере паролей.</small>` : ""}<div class="error" role="alert">${h(message)}</div><button class="primary" type="submit">${setup ? "Создать администратора" : invite ? "Создать учётную запись" : "Войти"}</button></form><div class="install-help">Доступ выдаёт администратор по приглашению. ${showInstallButton() ? `<button id="install" type="button">Установить приложение</button>` : ""}</div></main>`;
+  root.innerHTML = `<main class="auth"><div class="brand-mark" aria-hidden="true">▦</div><h1>${setup ? "Первый администратор" : invite ? "Регистрация" : "Домовые камеры"}</h1><p class="muted">${setup ? "" : invite ? `Здравствуйте, ${h(invitation.last_name)} ${h(invitation.first_name)}!<br>Выберите логин для входа и пароль.` : ""}</p><form class="stack" id="auth-form">${setup ? `<div class="two"><label>Фамилия<input name="last_name" autocomplete="family-name" required maxlength="100"></label><label>Имя<input name="first_name" autocomplete="given-name" required maxlength="100"></label></div>` : ""}<label>Логин<input name="login" autocomplete="username" autocapitalize="none" spellcheck="false" pattern="[A-Za-z0-9._\\-]{3,64}" minlength="3" maxlength="64" required></label><label>Пароль<input name="password" type="password" autocomplete="${mode === "login" ? "current-password" : "new-password"}" ${mode === "login" ? "" : "minlength=6"} maxlength="128" required></label>${mode !== "login" ? `<label>Повторите пароль<input name="password_confirmation" type="password" autocomplete="new-password" minlength="6" maxlength="128" required></label><small>От 6 символов.</small>` : ""}<div class="error" role="alert">${h(message)}</div><button class="primary" type="submit">${setup ? "Создать администратора" : invite ? "Зарегистрироваться" : "Войти"}</button></form><div class="install-help">${mode === "login" ? "Вход по приглашению. " : ""}${showInstallButton() ? `<button id="install" type="button">Установить</button>` : ""}</div></main>`;
   const epoch = routeEpoch;
   bindForm(document.querySelector("#auth-form"), async data => {
     if(mode !== "login" && data.password !== data.password_confirmation) throw new Error("Пароли не совпадают");
     await api(`/api/auth/${setup ? "setup" : invite ? "register" : "login"}`, "POST", {...data, ...(invite ? {token:invitation.token} : {})});
     if(epoch !== routeEpoch) return;
-    history.replaceState(null, "", "/"); await enter(epoch);
+    history.replaceState(null, "", "/"); activeLocation=location.hash;await enter(epoch);
   });
   const installButton = document.querySelector("#install");
   if (installButton) installButton.onclick = install;
 }
 async function install() {
   if (installPrompt) { await installPrompt.prompt(); installPrompt = null; }
-  else toast("iPhone: «Поделиться» → «На экран Домой». Android: меню браузера → «Установить приложение».");
+  else { const ios=/iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform==="MacIntel" && navigator.maxTouchPoints>1);toast(ios ? "«Поделиться» → «На экран Домой»" : "Меню браузера → «Установить приложение»"); }
 }
 async function boot() {
+  activeLocation=location.hash;
   const epoch = ++routeEpoch;
   tileObserver?.disconnect();
   stopVideo(); clearInterval(refreshTimer); clearTimeout(saveTimer);
@@ -69,7 +71,7 @@ async function boot() {
     authView(bootstrap.setup_required ? "setup" : "login");
   } catch(e) { if(epoch !== routeEpoch) return; const offline = e.network || !navigator.onLine; root.innerHTML = `<main class="auth"><div class="brand-mark">▦</div><h1>${offline ? "Нет связи с сервером" : "Не удалось открыть приложение"}</h1><p>${h(offline ? "Для входа и просмотра камер нужен интернет и доступ к серверу. Проверьте соединение. Ваши настройки сохранены на сервере." : e.message)}</p><button id="retry" class="primary">Повторить</button><p class="install-help"><a href="/">Перейти ко входу</a></p></main>`; document.querySelector("#retry").onclick = boot; }
 }
-async function enter(epoch = routeEpoch) { const result = await api("/api/me"), next = await api("/api/state"); if(epoch !== routeEpoch) return; me = result.user; csrf = result.csrf; state = next; page = "wall"; render(); clearInterval(refreshTimer); refreshTimer = setInterval(refresh, 15000); }
+async function enter(epoch = routeEpoch) { const result = await api("/api/me"), next = await api("/api/state"); if(epoch !== routeEpoch) return; me = result.user; csrf = result.csrf; state = next; page = me.role === "admin" && location.hash.startsWith("#/admin") ? "admin" : "wall"; render(); clearInterval(refreshTimer); refreshTimer = setInterval(refresh, 15000); }
 async function refresh() {
   if(!me || document.hidden) return;
   const epoch = routeEpoch;
@@ -88,17 +90,43 @@ async function refresh() {
 }
 function render() {
   tileObserver?.disconnect();
+  root.classList.remove("editing");
   if(!me || !state) return;
   stopVideo();
   root.innerHTML = `<header class="header"><div class="brand"><span class="symbol" aria-hidden="true">▦</span><div><strong>Домовые камеры</strong><div class="identity">${h(me.first_name)} ${h(me.last_name)}</div></div></div><div class="row"><nav class="tabs" aria-label="Разделы"><button data-page="wall" class="${page === "wall" ? "active" : ""}">Прямой эфир</button>${me.role === "admin" ? `<button data-page="admin" class="${page === "admin" ? "active" : ""}">Управление</button>` : ""}</nav><button id="logout">Выйти</button></div></header><main id="content"></main>`;
   document.querySelectorAll("[data-page]").forEach(button => {
     if(button.dataset.page === page) button.setAttribute("aria-current","page");
-    button.onclick = async () => { if(button.dataset.page === page) return; const epoch = routeEpoch; try { await flushSave(); if(epoch !== routeEpoch || !me || !button.isConnected) return; if(modal.open) modal.close(); page = button.dataset.page; render(); } catch(e) { toast(e.message); } };
+    button.onclick = () => navigateTo(button.dataset.page === "admin" ? "#/admin" : "");
   });
-  document.querySelector("#logout").onclick = async () => { try { await flushSave(); await api("/api/auth/logout","POST",{}); signedOut(); } catch(e) { toast(e.message); } };
+  document.querySelector("#logout").onclick = async () => { if(!mayLeaveAdmin())return; try { await flushSave(); await api("/api/auth/logout","POST",{}); signedOut(); } catch(e) { toast(e.message); } };
   if(page === "wall") wall(); else admin();
 }
+async function navigateTo(hash) {
+  if(!mayLeaveAdmin())return;
+  await flushSave();
+  finishAdminPicker();adminDraft=null;
+  if(modal.open)modal.close();
+  history.pushState(null,"",hash || "/");activeLocation=location.hash;
+  if(!me || location.hash.startsWith("#/invite/")){await boot();return;}
+  page=me.role==="admin" && location.hash.startsWith("#/admin") ? "admin" : "wall";
+  render();window.scrollTo(0,0);
+}
+async function locationChanged() {
+  if(adminPicker && location.hash===activeLocation){finishAdminPicker();return;}
+  if(location.hash===activeLocation)return;
+  if(!mayLeaveAdmin()){history.pushState(null,"",activeLocation || "/");return;}
+  activeLocation=location.hash;adminDraft=null;finishAdminPicker();
+  await flushSave();
+  if(!me || location.hash.startsWith("#/invite/")){await boot();return;}
+  if(modal.open)modal.close();
+  page=me.role==="admin" && location.hash.startsWith("#/admin") ? "admin" : "wall";
+  render();window.scrollTo(0,0);
+}
 const icons = {
+  back: '<path d="m14 6-6 6 6 6"/>',
+  chevron: '<path d="m9 6 6 6-6 6"/>',
+  refresh: '<path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 7a7 7 0 0 1 12-1l2 3M4 15l2 3a7 7 0 0 0 12-1"/>',
+
   more: '<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>',
   expand: '<path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/>',
   grid: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
@@ -109,11 +137,11 @@ const icon = name => `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidde
 const screenCount = n => `${n} ${n === 1 ? "экран" : n < 5 ? "экрана" : "экранов"}`;
 function wall() {
   const content = document.querySelector("#content");
-  content.innerHTML = `<div class="toolbar"><div class="row"><button id="preset">${icon("grid")}<span>Сетка</span></button><button id="add-tile">${icon("plus")}<span>Экран</span></button><button id="start-playback" hidden>Начать просмотр</button></div></div>${!state.configured ? `<div class="banner">Подключение к камерам не настроено. ${me.role === "admin" ? "Введите параметры в разделе «Управление → Подключение»." : "Обратитесь к администратору."}</div>` : !state.cameras.length ? `<div class="banner">${me.role === "admin" ? h(state.connection_state) : "Доступных камер пока нет. Обратитесь к администратору."}</div>` : ""}<div class="wall" id="wall" aria-label="Камеры"></div>`;
+  content.innerHTML = `<div class="toolbar"><div class="row"><button id="preset">${icon("grid")}<span>Сетка</span></button><button id="add-tile">${icon("plus")}<span>Камера</span></button><button id="start-playback" hidden>Начать просмотр</button></div></div>${!state.configured ? `<div class="banner">Подключение к камерам не настроено. ${me.role === "admin" ? "Введите параметры в разделе «Управление → Подключение»." : "Обратитесь к администратору."}</div>` : !state.cameras.length ? `<div class="banner">${me.role === "admin" ? h(state.connection_state) : "Доступных камер пока нет. Обратитесь к администратору."}</div>` : ""}<div class="wall" id="wall" aria-label="Камеры"></div>`;
   document.querySelector("#add-tile").onclick = () => {
     if(state.layout.tiles.length >= 64) return toast("Можно добавить до 64 экранов");
     const tile = {id:uid(),camera_id:null,width:1,height:1};
-    state.layout.tiles.push(tile); renderTiles(); changed(); chooseCamera(tile);
+    chooseCamera(tile, () => state.layout.tiles.push(tile));
   };
   document.querySelector("#preset").onclick = gridOptions;
   document.querySelector("#start-playback").onclick=resumeCameraPlayback;
@@ -134,7 +162,7 @@ function applyPreset(count) {
   modal.close(); renderTiles(); changed(); subscribe();
 }
 function gridOptions() {
-  dialog("Сетка",`<div class="presets">${[1,4,6,9,16].map(n => `<button data-preset="${n}" aria-label="${screenCount(n)}"><span class="preset-icon preset-${n}" aria-hidden="true">${Array.from({length:n},() => "<i></i>").join("")}</span><span>${n}</span></button>`).join("")}</div><form class="stack"><label>Колонки<select name="columns">${Array.from({length:12},(_,i) => `<option ${state.layout.columns === i+1 ? "selected" : ""}>${i+1}</option>`).join("")}</select></label><div class="error"></div><div class="actions"><button type="submit" class="primary">Применить</button></div></form>`);
+  dialog("Сетка",`<div class="presets">${[1,4,6,9,16].map(n => `<button data-preset="${n}" aria-label="${screenCount(n)}"><span class="preset-icon preset-${n}" aria-hidden="true">${Array.from({length:n},() => "<i></i>").join("")}</span><span>${n}</span></button>`).join("")}</div><details><summary>Настроить</summary><form class="stack"><label>Колонок<select name="columns">${Array.from({length:12},(_,i) => `<option ${state.layout.columns === i+1 ? "selected" : ""}>${i+1}</option>`).join("")}</select></label><div class="error"></div><button type="submit" class="primary">Сохранить</button></form></details>`);
   modal.querySelectorAll("[data-preset]").forEach(button => button.onclick = () => applyPreset(+button.dataset.preset));
   bindForm(modal.querySelector("form"),data => { state.layout.columns = +data.columns; modal.close(); renderTiles(); changed(); });
 }
@@ -146,8 +174,8 @@ function renderTiles() {
   wall.style.setProperty("--columns",columns);
   const cameras = new Map(state.cameras.map(c => [c.id,c]));
   wall.innerHTML = state.layout.tiles.length ? state.layout.tiles.map((tile,index) => {
-    const name = cameras.get(tile.camera_id)?.name || "Выбрать камеру";
-    return `<article class="tile" data-tile="${h(tile.id)}" aria-label="Экран ${index+1}"><div class="tile-head" draggable="true"><span class="status-dot" aria-hidden="true"></span><button class="camera-trigger" aria-label="Камера экрана ${index+1}: ${h(name)}" title="${h(name)}">${h(name)}${icon("down")}</button><button class="tile-menu icon-button" title="Настройки экрана" aria-label="Настройки экрана ${index+1}">${icon("more")}</button></div><div class="picture"><video muted autoplay playsinline webkit-playsinline disableRemotePlayback preload="auto"></video><canvas class="last-frame" hidden aria-hidden="true"></canvas><span class="stream-state">${tile.camera_id ? "Подключение…" : "Выбрать камеру"}</span><button class="tile-expand icon-button" title="Увеличить" aria-label="Увеличить экран ${index+1}">${icon("expand")}</button></div></article>`;
+    const name = cameras.get(tile.camera_id)?.name || `Экран ${index+1}`;
+    return `<article class="tile" data-tile="${h(tile.id)}" aria-label="Экран ${index+1}"><div class="tile-head" draggable="true"><span class="status-dot" aria-hidden="true"></span><button class="camera-trigger" aria-label="Камера экрана ${index+1}: ${h(name)}" title="${h(name)}">${h(name)}${icon("down")}</button><button class="tile-menu icon-button" title="Настройки экрана" aria-label="Настройки экрана ${index+1}">${icon("more")}</button></div><div class="picture"><video muted autoplay playsinline webkit-playsinline disableRemotePlayback preload="auto"></video><canvas class="last-frame" hidden aria-hidden="true"></canvas><span class="stream-state">${tile.camera_id ? "Подключение…" : ""}</span>${!tile.camera_id ? `<button class="empty-camera">${icon("plus")}<span>Камера</span></button>` : ""}<button ${tile.camera_id ? "" : "hidden"} class="tile-expand icon-button" title="Увеличить" aria-label="Увеличить экран ${index+1}">${icon("expand")}</button></div></article>`;
   }).join("") : `<div class="empty"><p>Добавьте экран или выберите сетку.</p><button class="primary" id="empty-add">Добавить экран</button></div>`;
   if(!state.layout.tiles.length) { document.querySelector("#empty-add").onclick = () => document.querySelector("#add-tile").click(); return; }
   const tilesById = new Map(state.layout.tiles.map(t => [t.id,t]));
@@ -163,6 +191,7 @@ function renderTiles() {
     element.style.setProperty("--ratio",cameraRatios.get(tile.camera_id) || 16/9);
     element.querySelector(".camera-trigger").onclick = () => { if(!dragged) chooseCamera(tile); };
     element.querySelector(".tile-menu").onclick = () => tileOptions(tile);
+    const empty=element.querySelector(".empty-camera");if(empty)empty.onclick=()=>chooseCamera(tile);
     element.querySelector(".tile-expand").onclick = () => tile.camera_id ? expandCamera(element) : chooseCamera(tile);
     element.querySelector(".picture").ondblclick = event => { if(tile.camera_id && !event.target.closest("button")) expandCamera(element); };
     const header = element.querySelector(".tile-head");
@@ -175,8 +204,8 @@ function renderTiles() {
     drawCached(tile,element);
   });
 }
-function chooseCamera(tile) {
-  dialog("Выбрать камеру",`<div class="camera-filters"><input type="search" id="camera-search" placeholder="Найти камеру" aria-label="Найти камеру" autocomplete="off"><select id="camera-group" aria-label="Группа камер"><option value="0">Все доступные</option>${state.groups.map(g => `<option value="${g.id}" ${me.role === "admin" && g.builtin ? "selected" : ""}>${h(g.name)}</option>`).join("")}</select></div><div class="camera-choices" id="camera-choices"></div>`);
+function chooseCamera(tile, onSelect) {
+  dialog(onSelect ? "Добавить камеру" : "Камера",`<div class="camera-filters"><input type="search" id="camera-search" placeholder="Найти камеру" aria-label="Найти камеру" autocomplete="off"><select id="camera-group" aria-label="Группа камер"><option value="0">Все доступные</option>${state.groups.map(g => `<option value="${g.id}" ${me.role === "admin" && g.builtin ? "selected" : ""}>${h(g.name)}</option>`).join("")}</select></div><div class="camera-choices" id="camera-choices"></div>`,"picker");
   const groups = new Map(state.groups.map(g => [g.id,new Set(g.camera_ids)]));
   const onWall = new Set(state.layout.tiles.map(t => t.camera_id).filter(Boolean));
   function filter() {
@@ -189,8 +218,8 @@ function chooseCamera(tile) {
     }
     const cameras = [...unused,...used];
     const list = modal.querySelector("#camera-choices");
-    list.innerHTML = cameras.map(c => `<button data-camera="${c.id}" class="camera-choice ${c.id === tile.camera_id ? "selected" : ""}" aria-pressed="${c.id === tile.camera_id}"${onWall.has(c.id) ? ' aria-label="'+h(c.name)+' — на экране"' : ''}><span>${h(c.name)}</span>${onWall.has(c.id) ? '<span class="camera-on-wall" title="На экране" aria-hidden="true"></span>' : '<span aria-hidden="true">+</span>'}</button>`).join("") || `<p class="empty">Камеры не найдены</p>`;
-    list.querySelectorAll("[data-camera]").forEach(button => button.onclick = () => { tile.camera_id = +button.dataset.camera; modal.close(); renderTiles(); changed(); subscribe(); });
+    list.innerHTML = cameras.map(c => `<button data-camera="${c.id}" class="camera-choice ${c.id === tile.camera_id ? "selected" : ""}" aria-pressed="${c.id === tile.camera_id}"${onWall.has(c.id) ? ' aria-label="'+h(c.name)+' — на экране"' : ''}><span>${h(c.name)}</span>${onWall.has(c.id) ? '<span class="camera-on-wall" title="На экране" aria-hidden="true"></span>' : ''}</button>`).join("") || `<p class="empty">Камеры не найдены</p>`;
+    list.querySelectorAll("[data-camera]").forEach(button => button.onclick = () => { tile.camera_id = +button.dataset.camera; onSelect?.(); modal.close(); renderTiles(); changed(); subscribe(); });
   }
   modal.querySelector("#camera-search").oninput = filter;
   modal.querySelector("#camera-group").onchange = filter;
@@ -271,64 +300,10 @@ function connectVideo() {
   };
   ws.onclose = event => { if(epoch !== socketEpoch) return; document.querySelectorAll(".tile").forEach(clearTile); if(event.code === 4401) signedOut("Сессия завершена. Войдите снова"); else if(event.code === 4403) { toast("Права доступа изменились"); refresh().then(() => { reconnectTimer = setTimeout(connectVideo,1500); }); } else reconnectTimer = setTimeout(connectVideo,2000); };
 }
-function accessFields(value = {}) {
-  return `<div class="access"><p class="access-note">Администраторы всегда видят все камеры. Для пользователя доступ складывается из выбранных групп и отдельных камер.</p><h3>Группы камер</h3><div class="checks">${state.groups.map(g => `<label><input type="checkbox" name="group_ids" value="${g.id}" ${(value.group_ids || []).includes(g.id) ? "checked" : ""}>${h(g.name)}</label>`).join("") || "Групп пока нет"}</div><h3>Отдельные камеры</h3><div class="checks">${state.cameras.map(c => `<label><input type="checkbox" name="camera_ids" value="${c.id}" ${(value.camera_ids || []).includes(c.id) ? "checked" : ""}>${h(c.name)}</label>`).join("") || "Камер пока нет"}</div></div>`;
-}
-function accessValue(form) { return {camera_ids:[...form.querySelectorAll("[name=camera_ids]:checked")].map(e => +e.value), group_ids:[...form.querySelectorAll("[name=group_ids]:checked")].map(e => +e.value)}; }
-async function admin(refreshState = false) {
-  if(!me || me.role !== "admin" || page !== "admin") return;
-  const content = document.querySelector("#content");
-  content.innerHTML = `<section class="admin"><nav class="admin-nav" aria-label="Управление">${Object.entries({users:"Пользователи",invites:"Приглашения",groups:"Группы",cameras:"Камеры",connection:"Подключение"}).map(([key,label]) => `<button data-tab="${key}" class="${key === adminTab ? "active" : ""}">${label}</button>`).join("")}</nav><div id="admin-body" class="surface"><p class="muted">Загрузка…</p></div></section>`;
-  content.querySelectorAll("[data-tab]").forEach(button => {
-    if(button.dataset.tab === adminTab) button.setAttribute("aria-current","page");
-    button.onclick = () => { if(button.dataset.tab === adminTab) return; adminTab = button.dataset.tab; admin(true); };
-  });
-  const body = document.querySelector("#admin-body"), tab = adminTab;
-  try {
-    if(refreshState) {
-      const next = await api("/api/state");
-      if(!body.isConnected || tab !== adminTab || !state) return;
-      state = {...state,...next,layout:state.layout};
-    }
-    if(tab === "users") {
-      const data = await api("/api/admin/users"); if(!body.isConnected || tab !== adminTab) return;
-      body.innerHTML = `<div class="row between"><h2>Пользователи</h2><button id="new-invite" class="primary">Пригласить</button></div><div class="table-wrap"><table><thead><tr><th>Имя и логин</th><th>Роль</th><th>Доступ</th><th></th></tr></thead><tbody>${data.users.map(u => `<tr><td>${h(u.last_name)} ${h(u.first_name)}<span class="muted">${h(u.login)}</span></td><td><span class="pill ${u.blocked ? "blocked" : ""}">${u.blocked ? "Заблокирован" : roleName(u.role)}</span></td><td>${u.role === "admin" ? "Все камеры" : `${u.group_ids.length} групп, ${u.camera_ids.length} камер`}</td><td><button data-user="${u.id}">Изменить</button></td></tr>`).join("")}</tbody></table></div>`;
-      body.querySelector("#new-invite").onclick = inviteForm; const users = new Map(data.users.map(u => [u.id,u])); body.querySelectorAll("[data-user]").forEach(button => button.onclick = () => userForm(users.get(+button.dataset.user)));
-    } else if(tab === "invites") {
-      const data = await api("/api/admin/invites"); if(!body.isConnected || tab !== adminTab) return;
-      body.innerHTML = `<div class="row between"><h2>Приглашения</h2><button id="new-invite" class="primary">Создать приглашение</button></div><p class="muted">Ссылка действует семь дней и позволяет создать только одну учётную запись. Скопировать её можно сразу после создания.</p>${data.invitations.length ? `<div class="table-wrap"><table><thead><tr><th>Получатель</th><th>Роль</th><th></th></tr></thead><tbody>${data.invitations.map(i => `<tr><td>${h(i.last_name)} ${h(i.first_name)}</td><td>${roleName(i.role)}</td><td><button data-revoke="${i.id}" class="danger">Отозвать</button></td></tr>`).join("")}</tbody></table></div>` : `<p class="empty">Приглашений пока нет</p>`}`;
-      body.querySelector("#new-invite").onclick = inviteForm; body.querySelectorAll("[data-revoke]").forEach(button => button.onclick = async () => { try { await api(`/api/admin/invites/${button.dataset.revoke}`,"DELETE",{}); admin(); } catch(e) { toast(e.message); } });
-    } else if(tab === "groups") {
-      body.innerHTML = `<div class="row between"><h2>Группы камер</h2><button id="new-group" class="primary">Создать группу</button></div><p class="muted">Доступ к группе включает камеры, выбранные в её составе.</p><div class="table-wrap"><table><thead><tr><th>Название</th><th>Камер</th><th></th></tr></thead><tbody>${state.groups.map(g => `<tr><td>${h(g.name)}${g.builtin ? `<span class="muted">Основной список для просмотра</span>` : ""}</td><td>${g.camera_ids.length}</td><td><button data-group="${g.id}">Изменить</button></td></tr>`).join("")}</tbody></table></div>`;
-      body.querySelector("#new-group").onclick = () => groupForm(); const groups = new Map(state.groups.map(g => [g.id,g])); body.querySelectorAll("[data-group]").forEach(button => button.onclick = () => groupForm(groups.get(+button.dataset.group)));
-    } else if(tab === "cameras") {
-      body.innerHTML = `<div class="row between"><h2>Названия камер</h2><button id="sync">Обновить список камер</button></div><p class="muted">Эти названия будут видны всем пользователям.</p><form class="stack form-limit"><div class="camera-names">${state.cameras.map(c => `<label class="camera-name"><span>Канал ${c.id}</span><input name="camera_${c.id}" value="${h(c.name)}" required maxlength="120" aria-label="Имя камеры ${c.id}"></label>`).join("") || `<p>${h(state.connection_state)}</p>`}</div><div class="error"></div><button type="submit" class="primary">Сохранить названия</button></form>`;
-      body.querySelector("#sync").onclick = async () => { try { await api("/api/admin/sync","POST",{}); toast("Обновляем список. Это может занять пару минут."); } catch(e) { toast(e.message); } };
-      bindForm(body.querySelector("form"), async data => { await api("/api/admin/cameras","PUT",{cameras:state.cameras.map(c => ({id:c.id,name:data[`camera_${c.id}`]}))}); state.cameras = (await api("/api/state")).cameras; toast("Названия сохранены"); });
-    } else if(tab === "connection") {
-      const connection = await api("/api/admin/connection"); if(!body.isConnected || tab !== adminTab) return;
-      body.innerHTML = `<div class="form-limit"><h2>Подключение к камерам</h2><p><span class="pill">${connection.configured ? "Параметры заданы" : "Не настроено"}</span></p><p class="muted">${h(connection.state)}</p><p>Чтобы изменить подключение, введите все три параметра заново. Сохранённые значения не показываются.</p><form class="stack" autocomplete="off"><label>ID регистратора<input name="ID" required maxlength="128" autocomplete="off" spellcheck="false"></label><label>UserName<input name="UserName" required maxlength="128" autocomplete="off" spellcheck="false"></label><label>Password<input name="Password" type="password" required maxlength="256" autocomplete="new-password"></label><div class="error"></div><button type="submit" class="primary">Заменить параметры подключения</button></form><p class="install-help">Просмотр временно переподключится. Параметры используются только сервером для связи с регистратором.</p></div>`;
-      bindForm(body.querySelector("form"), async data => { await api("/api/admin/connection","PUT",data); body.querySelector("form").reset(); state.configured = true; toast("Параметры сохранены. Подключаемся к регистратору."); admin(); });
-    }
-  } catch(e) { if(body.isConnected) { body.innerHTML = `<p class="error" role="alert">${h(e.message)}</p><button id="retry-admin">Повторить</button>`; body.querySelector("#retry-admin").onclick = () => admin(true); } }
-}
-function personFields(user = {}) { return `<div class="two"><label>Фамилия<input name="last_name" required maxlength="100" value="${h(user.last_name)}"></label><label>Имя<input name="first_name" required maxlength="100" value="${h(user.first_name)}"></label></div><label>Роль<select name="role"><option value="user" ${user.role !== "admin" ? "selected" : ""}>Пользователь</option><option value="admin" ${user.role === "admin" ? "selected" : ""}>Администратор</option></select></label>`; }
-function inviteForm() {
-  dialog("Пригласить пользователя",`<form class="stack">${personFields()}${accessFields()}<div class="error"></div><button class="primary" type="submit">Создать ссылку</button></form>`);
-  const form = modal.querySelector("form"); bindForm(form,async data => { const invite = await api("/api/admin/invites","POST",{...data,...accessValue(form)}); const link = `${location.origin}/#/invite/${invite.token}`; modal.innerHTML = `<button class="close" aria-label="Закрыть">×</button><h2>Приглашение готово</h2><p>Передайте ссылку ${h(data.first_name)}. Она действует семь дней и сработает один раз.</p><a class="invite-link" href="${h(link)}" target="_blank" rel="noopener noreferrer">${h(link)}</a><p class="muted">Ссылка больше не будет показана. Если потеряете её, создайте новое приглашение.</p><button class="primary" id="copy-link">Скопировать ссылку</button>`; modal.querySelector(".close").onclick = () => { modal.close(); admin(); }; modal.querySelector("#copy-link").onclick = async () => { try { await navigator.clipboard.writeText(link); toast("Ссылка скопирована"); } catch { toast("Выделите и скопируйте ссылку вручную"); } }; });
-}
-function userForm(user) {
-  dialog("Права пользователя",`<p class="muted">Логин: ${h(user.login)}</p><form class="stack">${personFields(user)}<label class="row"><input type="checkbox" name="blocked" ${user.blocked ? "checked" : ""}>Заблокировать пользователя</label>${accessFields(user)}<div class="error"></div><button type="submit" class="primary">Сохранить права</button></form>`);
-  const form = modal.querySelector("form"); bindForm(form,async data => { await api(`/api/admin/users/${user.id}`,"PUT",{...data,...accessValue(form),blocked:form.elements.blocked.checked}); modal.close(); toast("Права сохранены"); await refresh(); if(me) admin(); });
-}
-function groupForm(group = {}) {
-  const selected = new Set(group.camera_ids || []);
-  dialog(group.id ? "Изменить группу" : "Новая группа",`<form class="stack"><label>Название группы<input name="name" value="${h(group.name)}" maxlength="100" required ${group.builtin ? "readonly" : ""}></label>${group.builtin ? `<p class="muted">Исключите ненужные камеры из основного списка. Доступ через другие группы и отдельные разрешения сохранится.</p>` : ""}<h3>Камеры</h3><div class="checks">${state.cameras.map(c => `<label><input type="checkbox" name="camera_ids" value="${c.id}" ${selected.has(c.id) ? "checked" : ""}>${h(c.name)}</label>`).join("") || "Камер пока нет"}</div><div class="error"></div><div class="actions">${group.id && !group.builtin ? `<button type="button" class="danger" id="delete-group">Удалить группу</button>` : ""}<button type="submit" class="primary">Сохранить группу</button></div></form>`);
-  const form = modal.querySelector("form"); bindForm(form,async data => { await api(`/api/admin/groups${group.id ? `/${group.id}` : ""}`,group.id ? "PUT" : "POST",{name:data.name,camera_ids:accessValue(form).camera_ids}); modal.close(); state.groups = (await api("/api/state")).groups; admin(); toast("Группа сохранена"); });
-  const remove = modal.querySelector("#delete-group"); if(remove) remove.onclick = async () => { if(!confirm("Удалить группу? Доступ, выданный через неё, прекратится.")) return; try { await api(`/api/admin/groups/${group.id}`,"DELETE",{}); modal.close(); state.groups = (await api("/api/state")).groups; admin(); } catch(e) { toast(e.message); } };
-}
 window.addEventListener("beforeinstallprompt", event => { event.preventDefault(); installPrompt = event; });
-window.addEventListener("hashchange", () => { flushSave().finally(boot); });
+window.addEventListener("hashchange", locationChanged);
+window.addEventListener("popstate", locationChanged);
+window.addEventListener("beforeunload", event => { if(draftChanged()){event.preventDefault();event.returnValue="";} });
 window.addEventListener("offline", () => { toast("Нет сети. Эфир возобновится после подключения."); });
 window.addEventListener("online", () => { if(me) { refresh(); connectVideo(); } else boot(); });
 window.addEventListener("camera-playback-policy",event=>{const button=document.querySelector("#start-playback");if(button)button.hidden=!event.detail.blocked;});

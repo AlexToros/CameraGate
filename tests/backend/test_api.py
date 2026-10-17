@@ -181,7 +181,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.get('/manifest.webmanifest')
         manifest = await response.json(content_type=None)
         self.assertEqual(manifest['display'],'standalone')
-        for path in ('/','/app.js','/player.js','/style.css','/sw.js','/icon-192.png','/icon-512.png','/apple-touch-icon.png'):
+        for path in ('/','/app.js','/admin.js','/player.js','/style.css','/sw.js','/icon-192.png','/icon-512.png','/apple-touch-icon.png'):
             self.assertEqual((await self.client.get(path)).status,200)
         response = await self.client.post('/api/auth/login',json=dict(login='admin',password=PASSWORD))
         cookie = response.cookies[COOKIE]

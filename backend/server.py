@@ -307,7 +307,7 @@ def create_app(store, streams=None, secure=False, auto_sync=True):
     app[PORTAL] = portal
     app.router.add_get('/api/live',portal.live)
     app.router.add_route('*','/api/{tail:.*}',portal.api)
-    assets = {'/':'index.html','/app.js':'app.js','/player.js':'player.js','/style.css':'style.css','/manifest.webmanifest':'manifest.webmanifest',
+    assets = {'/':'index.html','/app.js':'app.js','/admin.js':'admin.js','/player.js':'player.js','/style.css':'style.css','/manifest.webmanifest':'manifest.webmanifest',
               '/sw.js':'sw.js','/icon-192.png':'icons/icon-192.png','/icon-512.png':'icons/icon-512.png','/apple-touch-icon.png':'icons/apple-touch-icon.png'}
     async def asset(request):
         return web.FileResponse(FRONTEND/assets[request.path])
