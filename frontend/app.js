@@ -63,10 +63,11 @@ async function boot() {
   try {
     const token = location.hash.startsWith("#/invite/") ? location.hash.slice(9) : null;
     if(token !== null) { const preview = await api("/api/invite/preview", "POST", {token}); if(epoch === routeEpoch) authView("invite", {...preview,token}); return; }
+    try { await enter(epoch); return; }
+    catch(e) { if(epoch !== routeEpoch) return; if(e.status !== 401) throw e; }
     const bootstrap = await api("/api/bootstrap");
     if(epoch !== routeEpoch) return;
-    if(bootstrap.setup_required) authView("setup");
-    else { try { await enter(epoch); } catch(e) { if(epoch !== routeEpoch) return; if(e.status === 401) authView("login"); else throw e; } }
+    authView(bootstrap.setup_required ? "setup" : "login");
   } catch(e) { if(epoch !== routeEpoch) return; const offline = e.network || !navigator.onLine; root.innerHTML = `<main class="auth"><div class="brand-mark">▦</div><h1>${offline ? "Нет связи с сервером" : "Не удалось открыть приложение"}</h1><p>${h(offline ? "Для входа и просмотра камер нужен интернет и доступ к серверу. Проверьте соединение. Ваши настройки сохранены на сервере." : e.message)}</p><button id="retry" class="primary">Повторить</button><p class="install-help"><a href="/">Перейти ко входу</a></p></main>`; document.querySelector("#retry").onclick = boot; }
 }
 async function enter(epoch = routeEpoch) { const result = await api("/api/me"), next = await api("/api/state"); if(epoch !== routeEpoch) return; me = result.user; csrf = result.csrf; state = next; page = "wall"; render(); clearInterval(refreshTimer); refreshTimer = setInterval(refresh, 15000); }
