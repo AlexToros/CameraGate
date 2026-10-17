@@ -18,6 +18,8 @@
 - Blocking and permission changes must affect existing sessions and active streams, not only new requests.
 - PostgreSQL in all environments; do not introduce SQLite. Keep Docker Compose and nginx configuration for later deployment, but simplify the local preview.
 - Installable PWA is required. Finish core flows first, then verify responsive layouts and touch controls. Never cache authenticated API responses or video in the service worker.
+- Show the install button only on mobile platforms (including iPad desktop UA), and hide it inside the installed app. A narrow desktop window is not a mobile platform.
+- Invitation registration greets the assigned last/first name, explains the login, and asks for login/password/password confirmation. A mismatch must not submit or consume the invite.
 
 ## Portal architecture
 
@@ -29,6 +31,7 @@
 - `vesta.py` owns only the native transport/decoder. Credentials enter worker stdin, never command-line arguments. Native media workers skip redundant catalog queries; catalog discovery is separate.
 - `gateway.py` and `gateway_client.py`: optional token-authenticated media worker for a Linux portal container. Browser access to the gateway is forbidden. Full Linux camera transport remains a separate prerequisite; macOS dylib is not portable.
 - `app.js`, `style.css`: vanilla UI, wall presets/custom sizes/reordering, administration. Mobile layout may reduce visible columns without changing the saved layout. Keyboard/touch reordering is available in the tile-size dialog.
+- Invitation links must be actual clickable anchors. Handle hash navigation in an already open app; ignore late responses from a previous route so they cannot replace the registration form.
 - Manifest/icons/service worker implement PWA. Only public app-shell assets may enter CacheStorage. Phone installation requires trusted HTTPS; desktop localhost works for local preview.
 - `compose.yaml`: PostgreSQL, portal and nginx, persistent DB/key volumes, file secrets. Only nginx publishes a loopback port. No VPS deployment is authorized.
 

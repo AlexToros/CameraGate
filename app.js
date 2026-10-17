@@ -4,8 +4,13 @@ const h = value => String(value ?? "").replace(/[&<>"\x27]/g, c => ({"&":"&amp;"
 let me, csrf, state, page = "wall", adminTab = "users", socket, socketEpoch = 0, saveTimer, saving = Promise.resolve(), draftVersion = 0, refreshTimer, installPrompt, reconnectTimer;
 const images = new Map();
 let dragged;
+let routeEpoch = 0;
 const roleName = role => role === "admin" ? "Администратор" : "Пользователь";
 const uid = () => crypto.randomUUID().replaceAll("-", "");
+function showInstallButton() {
+  const mobile = navigator.userAgentData?.mobile || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  return mobile && !matchMedia("(display-mode: standalone)").matches && navigator.standalone !== true;
+}
 function toast(message) { const box = document.querySelector("#notice"); box.textContent = message; box.classList.add("visible"); clearTimeout(box.timer); box.timer = setTimeout(() => box.classList.remove("visible"), 4500); }
 async function api(path, method = "GET", data) {
   let response;
@@ -30,32 +35,46 @@ function stopVideo() { clearTimeout(reconnectTimer); socketEpoch++; if(socket) s
 function signedOut(message) { me = null; csrf = null; state = null; clearInterval(refreshTimer); clearTimeout(saveTimer); stopVideo(); if(modal.open) modal.close(); authView("login", null, message); }
 function authView(mode, invitation, message = "") {
   const setup = mode === "setup", invite = mode === "invite";
-  root.innerHTML = `<main class="auth"><div class="brand-mark" aria-hidden="true">▦</div><h1>${setup ? "Первый администратор" : invite ? "Вас пригласили" : "Домовые камеры"}</h1><p class="muted">${setup ? "Создайте учётную запись, чтобы настроить доступ к камерам." : invite ? `${h(invitation.last_name)} ${h(invitation.first_name)}<br>${roleName(invitation.role)}. Осталось выбрать логин и пароль.` : "Войдите, чтобы открыть свою видеостену."}</p><form class="stack" id="auth-form">${setup ? `<div class="two"><label>Фамилия<input name="last_name" autocomplete="family-name" required maxlength="100"></label><label>Имя<input name="first_name" autocomplete="given-name" required maxlength="100"></label></div>` : ""}<label>Логин<input name="login" autocomplete="username" autocapitalize="none" spellcheck="false" pattern="[A-Za-z0-9._\\-]{3,64}" minlength="3" maxlength="64" required></label><label>Пароль<input name="password" type="password" autocomplete="${mode === "login" ? "current-password" : "new-password"}" ${mode === "login" ? "" : "minlength=12"} maxlength="128" required></label>${mode !== "login" ? "<small>От 12 символов. Сохраните пароль в менеджере паролей.</small>" : ""}<div class="error" role="alert">${h(message)}</div><button class="primary" type="submit">${setup ? "Создать администратора" : invite ? "Создать учётную запись" : "Войти"}</button></form><div class="install-help">Доступ выдаёт администратор по приглашению. <button id="install" type="button">Установить приложение</button></div></main>`;
+  root.innerHTML = `<main class="auth"><div class="brand-mark" aria-hidden="true">▦</div><h1>${setup ? "Первый администратор" : invite ? "Регистрация" : "Домовые камеры"}</h1><p class="muted">${setup ? "Создайте учётную запись, чтобы настроить доступ к камерам." : invite ? `Здравствуйте, ${h(invitation.last_name)} ${h(invitation.first_name)}!<br>Введите логин, который будете использовать для входа, и задайте пароль.` : "Войдите, чтобы открыть свою видеостену."}</p><form class="stack" id="auth-form">${setup ? `<div class="two"><label>Фамилия<input name="last_name" autocomplete="family-name" required maxlength="100"></label><label>Имя<input name="first_name" autocomplete="given-name" required maxlength="100"></label></div>` : ""}<label>Логин<input name="login" autocomplete="username" autocapitalize="none" spellcheck="false" pattern="[A-Za-z0-9._\\-]{3,64}" minlength="3" maxlength="64" required></label><label>Пароль<input name="password" type="password" autocomplete="${mode === "login" ? "current-password" : "new-password"}" ${mode === "login" ? "" : "minlength=12"} maxlength="128" required></label>${mode !== "login" ? `<label>Повторите пароль<input name="password_confirmation" type="password" autocomplete="new-password" minlength="12" maxlength="128" required></label><small>От 12 символов. Сохраните пароль в менеджере паролей.</small>` : ""}<div class="error" role="alert">${h(message)}</div><button class="primary" type="submit">${setup ? "Создать администратора" : invite ? "Создать учётную запись" : "Войти"}</button></form><div class="install-help">Доступ выдаёт администратор по приглашению. ${showInstallButton() ? `<button id="install" type="button">Установить приложение</button>` : ""}</div></main>`;
+  const epoch = routeEpoch;
   bindForm(document.querySelector("#auth-form"), async data => {
+    if(mode !== "login" && data.password !== data.password_confirmation) throw new Error("Пароли не совпадают");
     await api(`/api/auth/${setup ? "setup" : invite ? "register" : "login"}`, "POST", {...data, ...(invite ? {token:invitation.token} : {})});
-    history.replaceState(null, "", "/"); await enter();
+    if(epoch !== routeEpoch) return;
+    history.replaceState(null, "", "/"); await enter(epoch);
   });
-  document.querySelector("#install").onclick = install;
+  const installButton = document.querySelector("#install");
+  if (installButton) installButton.onclick = install;
 }
 async function install() {
   if (installPrompt) { await installPrompt.prompt(); installPrompt = null; }
   else toast("iPhone: «Поделиться» → «На экран Домой». Android: меню браузера → «Установить приложение».");
 }
 async function boot() {
+  const epoch = ++routeEpoch;
+  stopVideo(); clearInterval(refreshTimer); clearTimeout(saveTimer);
+  me = null; csrf = null; state = null;
+  if(modal.open) modal.close();
+  root.innerHTML = `<main class="auth"><div class="brand-mark" aria-hidden="true">▦</div><h1>Домовые камеры</h1><p role="status">Открываем приложение…</p></main>`;
   try {
     const token = location.hash.startsWith("#/invite/") ? location.hash.slice(9) : null;
-    if(token) { const preview = await api("/api/invite/preview", "POST", {token}); authView("invite", {...preview,token}); return; }
+    if(token !== null) { const preview = await api("/api/invite/preview", "POST", {token}); if(epoch === routeEpoch) authView("invite", {...preview,token}); return; }
     const bootstrap = await api("/api/bootstrap");
+    if(epoch !== routeEpoch) return;
     if(bootstrap.setup_required) authView("setup");
-    else { try { await enter(); } catch(e) { if(e.status === 401) authView("login"); else throw e; } }
-  } catch(e) { const offline = e.network || !navigator.onLine; root.innerHTML = `<main class="auth"><div class="brand-mark">▦</div><h1>${offline ? "Нет связи с сервером" : "Не удалось открыть приложение"}</h1><p>${h(offline ? "Для входа и просмотра камер нужен интернет и доступ к серверу. Проверьте соединение. Ваши настройки сохранены на сервере." : e.message)}</p><button id="retry" class="primary">Повторить</button><p class="install-help"><a href="/">Перейти ко входу</a></p></main>`; document.querySelector("#retry").onclick = boot; }
+    else { try { await enter(epoch); } catch(e) { if(epoch !== routeEpoch) return; if(e.status === 401) authView("login"); else throw e; } }
+  } catch(e) { if(epoch !== routeEpoch) return; const offline = e.network || !navigator.onLine; root.innerHTML = `<main class="auth"><div class="brand-mark">▦</div><h1>${offline ? "Нет связи с сервером" : "Не удалось открыть приложение"}</h1><p>${h(offline ? "Для входа и просмотра камер нужен интернет и доступ к серверу. Проверьте соединение. Ваши настройки сохранены на сервере." : e.message)}</p><button id="retry" class="primary">Повторить</button><p class="install-help"><a href="/">Перейти ко входу</a></p></main>`; document.querySelector("#retry").onclick = boot; }
 }
-async function enter() { const result = await api("/api/me"); me = result.user; csrf = result.csrf; state = await api("/api/state"); page = "wall"; render(); clearInterval(refreshTimer); refreshTimer = setInterval(refresh, 15000); }
+async function enter(epoch = routeEpoch) { const result = await api("/api/me"), next = await api("/api/state"); if(epoch !== routeEpoch) return; me = result.user; csrf = result.csrf; state = next; page = "wall"; render(); clearInterval(refreshTimer); refreshTimer = setInterval(refresh, 15000); }
 async function refresh() {
   if(!me || document.hidden) return;
+  const epoch = routeEpoch;
   try {
-    const current = await api("/api/me"); me = current.user; csrf = current.csrf;
+    const current = await api("/api/me");
+    if(epoch !== routeEpoch || !state) return;
     const next = await api("/api/state");
+    if(epoch !== routeEpoch || !state) return;
+    me = current.user; csrf = current.csrf;
     const changed = JSON.stringify(next.cameras) !== JSON.stringify(state.cameras) || next.configured !== state.configured || (page === "admin" && me.role !== "admin");
     state.groups = next.groups; state.cameras = next.cameras; state.configured = next.configured; state.connection_state = next.connection_state;
     const allowed = new Set(state.cameras.map(c => c.id));
@@ -192,7 +211,7 @@ async function admin() {
 function personFields(user = {}) { return `<div class="two"><label>Фамилия<input name="last_name" required maxlength="100" value="${h(user.last_name)}"></label><label>Имя<input name="first_name" required maxlength="100" value="${h(user.first_name)}"></label></div><label>Роль<select name="role"><option value="user" ${user.role !== "admin" ? "selected" : ""}>Пользователь</option><option value="admin" ${user.role === "admin" ? "selected" : ""}>Администратор</option></select></label>`; }
 function inviteForm() {
   dialog("Пригласить пользователя",`<form class="stack">${personFields()}${accessFields()}<div class="error"></div><button class="primary" type="submit">Создать ссылку</button></form>`);
-  const form = modal.querySelector("form"); bindForm(form,async data => { const invite = await api("/api/admin/invites","POST",{...data,...accessValue(form)}); const link = `${location.origin}/#/invite/${invite.token}`; modal.innerHTML = `<button class="close" aria-label="Закрыть">×</button><h2>Приглашение готово</h2><p>Передайте ссылку ${h(data.first_name)}. Она действует семь дней и сработает один раз.</p><p class="invite-link">${h(link)}</p><p class="muted">Ссылка больше не будет показана. Если потеряете её, создайте новое приглашение.</p><button class="primary" id="copy-link">Скопировать ссылку</button>`; modal.querySelector(".close").onclick = () => { modal.close(); admin(); }; modal.querySelector("#copy-link").onclick = async () => { try { await navigator.clipboard.writeText(link); toast("Ссылка скопирована"); } catch { toast("Выделите и скопируйте ссылку вручную"); } }; });
+  const form = modal.querySelector("form"); bindForm(form,async data => { const invite = await api("/api/admin/invites","POST",{...data,...accessValue(form)}); const link = `${location.origin}/#/invite/${invite.token}`; modal.innerHTML = `<button class="close" aria-label="Закрыть">×</button><h2>Приглашение готово</h2><p>Передайте ссылку ${h(data.first_name)}. Она действует семь дней и сработает один раз.</p><a class="invite-link" href="${h(link)}" target="_blank" rel="noopener noreferrer">${h(link)}</a><p class="muted">Ссылка больше не будет показана. Если потеряете её, создайте новое приглашение.</p><button class="primary" id="copy-link">Скопировать ссылку</button>`; modal.querySelector(".close").onclick = () => { modal.close(); admin(); }; modal.querySelector("#copy-link").onclick = async () => { try { await navigator.clipboard.writeText(link); toast("Ссылка скопирована"); } catch { toast("Выделите и скопируйте ссылку вручную"); } }; });
 }
 function userForm(user) {
   dialog("Права пользователя",`<p class="muted">Логин: ${h(user.login)}</p><form class="stack">${personFields(user)}<label class="row"><input type="checkbox" name="blocked" ${user.blocked ? "checked" : ""}>Заблокировать пользователя</label>${accessFields(user)}<div class="error"></div><button type="submit" class="primary">Сохранить права</button></form>`);
@@ -204,6 +223,7 @@ function groupForm(group = {}) {
   const remove = modal.querySelector("#delete-group"); if(remove) remove.onclick = async () => { if(!confirm("Удалить группу? Доступ, выданный через неё, прекратится.")) return; try { await api(`/api/admin/groups/${group.id}`,"DELETE",{}); modal.close(); state.groups = (await api("/api/state")).groups; admin(); } catch(e) { toast(e.message); } };
 }
 window.addEventListener("beforeinstallprompt", event => { event.preventDefault(); installPrompt = event; });
+window.addEventListener("hashchange", () => { flushSave().finally(boot); });
 window.addEventListener("offline", () => { toast("Нет сети. Эфир возобновится после подключения."); });
 window.addEventListener("online", () => { if(me) { refresh(); connectVideo(); } else boot(); });
 document.addEventListener("visibilitychange", () => { if(document.hidden) { flushSave(); stopVideo(); } else if(me && page === "wall") { refresh(); connectVideo(); } });
