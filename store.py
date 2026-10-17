@@ -131,7 +131,7 @@ class Store:
     def refresh(self):
         with self.lock, self.pool.connection() as conn:
             snapshot = self._snapshot(conn)
-        self.snapshot = snapshot
+            self.snapshot = snapshot
 
     def mutate(self, action):
         with self.lock:

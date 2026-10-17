@@ -1,15 +1,21 @@
 <!doctype html>
 <html lang="ru">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Домовые камеры</title><link rel="stylesheet" href="/style.css"><script defer src="/app.js"></script></head>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#253544">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Домовые камеры">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="icon" href="/icon-192.png" type="image/png">
+<link rel="stylesheet" href="/style.css">
+<title>Домовые камеры</title>
+<script src="/app.js" defer></script>
+</head>
 <body>
-<header><div class="brand"><span class="mark" aria-hidden="true">◉</span><h1>Домовые камеры</h1></div><div class="connection"><span id="lamp"></span><span id="connection">Подключение</span></div></header>
-<main>
-<section class="viewer" aria-label="Видеоплеер">
-<div class="picture" id="picture"><img id="video" hidden alt="Прямой эфир выбранной камеры"><div id="waiting" role="status">Подключение к регистратору…</div></div>
-<div class="toolbar"><div><h2 id="title">Камера</h2><p id="status" aria-live="polite">Получаем список каналов</p></div><button id="fullscreen" type="button">На весь экран <span aria-hidden="true">⛶</span></button></div>
-<p class="hint">Выберите камеру из списка. Переключение может занять несколько секунд.</p>
-</section>
-<aside><div class="list-heading"><h2>Камеры</h2><span id="count">—</span></div><label class="search-label" for="search">Найти камеру</label><input id="search" type="search" placeholder="Название или номер" autocomplete="off"><nav id="channels" aria-label="Выбор камеры"></nav><p id="empty" hidden>Камеры не найдены</p></aside>
-</main>
-<footer><span>Локальный просмотр</span><span>Выбранная камера общая для открытых вкладок</span></footer>
-</body></html>
+<div id="app"><main class="auth"><div class="brand-mark">▦</div><h1>Домовые камеры</h1><p role="status">Открываем приложение…</p></main></div>
+<dialog id="modal"></dialog><div id="notice" role="status" aria-live="polite"></div>
+</body>
+</html>

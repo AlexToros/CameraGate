@@ -802,7 +802,10 @@ def catalog_main():
                                for i in range(count)], ensure_ascii=False) + '\n')
         pipe.flush()
         os._exit(0)
-    except Exception:
+    except Exception as error:
+        # Only the exception type, never native messages or configuration.
+        pipe.write(json.dumps({'error_type': type(error).__name__}) + '\n')
+        pipe.flush()
         os._exit(1)
 
 

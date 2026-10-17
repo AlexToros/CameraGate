@@ -1,0 +1,138 @@
+import asyncio
+from pathlib import Path
+import time
+from types import SimpleNamespace
+import unittest
+
+from aiohttp import CookieJar, WSMsgType
+from aiohttp.test_utils import TestClient, TestServer
+from server import create_app, COOKIE
+from test_store import DatabaseCase, PASSWORD
+
+
+class FakeStreams:
+    def __init__(self):
+        self.config = None
+        self.sources = {}
+        self.image = (Path(__file__).parent/'icon-192.png').read_bytes()
+    def subscribe(self, values):
+        for cid in values:
+            self.sources.setdefault(cid,SimpleNamespace(jpeg=self.image,frame_id=1,last_frame=time.monotonic(),state='test'))
+            self.sources[cid].last_frame = time.monotonic()
+        return {cid:self.sources[cid] for cid in values}
+    async def replace(self, config):
+        self.config = config
+        self.sources = {}
+    async def catalog(self):
+        return ['Камера 1','Камера 2']
+    async def close(self):
+        pass
+
+
+class ApiTests(unittest.IsolatedAsyncioTestCase):
+    setUpClass = classmethod(DatabaseCase.setUpClass.__func__)
+    tearDownClass = classmethod(DatabaseCase.tearDownClass.__func__)
+    setUp = DatabaseCase.setUp
+    tearDown = DatabaseCase.tearDown
+
+    async def asyncSetUp(self):
+        self.streams = FakeStreams()
+        self.app = create_app(self.store,self.streams,auto_sync=False)
+        self.client = TestClient(TestServer(self.app),cookie_jar=CookieJar(unsafe=True))
+        await self.client.start_server()
+        response = await self.client.post('/api/auth/setup',json=dict(login='admin',password=PASSWORD,first_name='A',last_name='B'))
+        self.assertEqual(response.status,200)
+        self.me = await (await self.client.get('/api/me')).json()
+        cookie = next(c.value for c in self.client.session.cookie_jar if c.key == COOKIE)
+        self.client.session.cookie_jar.clear()
+        self.client.session.headers['Cookie'] = COOKIE+'='+cookie
+        self.headers = {'X-CSRF-Token':self.me['csrf']}
+        self.store.sync_cameras(['One','Two'])
+
+    async def asyncTearDown(self):
+        await self.client.close()
+
+    async def viewer(self):
+        invite = self.store.invite(self.me['user']['id'],dict(first_name='User',last_name='Viewer',role='user',camera_ids=[1]))
+        token = self.store.register(dict(login='viewer',password=PASSWORD,token=invite['token']))
+        user,session = self.store.user(token)
+        return user, {'Cookie':COOKIE+'='+token,'X-CSRF-Token':session['csrf']},session['csrf']
+
+    async def test_csrf_roles_private_files_and_write_only_credentials(self):
+        for path in ('/.env','/.runtime/data/secret.key','/store.py'):
+            self.assertEqual((await self.client.get(path)).status,404)
+        self.assertEqual((await self.client.put('/api/admin/connection',json={},headers={'Origin':'https://evil.example'})).status,403)
+        self.assertEqual((await self.client.put('/api/admin/connection',json={})).status,403)
+        _,headers,_ = await self.viewer()
+        self.assertEqual((await self.client.get('/api/admin/users',headers=headers)).status,403)
+        state = await (await self.client.get('/api/state',headers=headers)).json()
+        self.assertEqual([c['id'] for c in state['cameras']],[1])
+        self.assertFalse(state['configured'])
+        secret = dict(ID='sensitive-id',UserName='sensitive-user',Password='sensitive-password')
+        self.assertEqual((await self.client.put('/api/admin/connection',json=secret,headers=self.headers)).status,200)
+        for path in ('/api/admin/connection','/api/state','/api/me','/api/admin/users'):
+            body = await (await self.client.get(path)).text()
+            for value in secret.values():
+                self.assertNotIn(value,body)
+
+    async def test_active_stream_revocation_and_block(self):
+        user,headers,csrf = await self.viewer()
+        self.streams.config = {'test':True}
+        ws = await self.client.ws_connect('/api/live',headers=headers)
+        await ws.send_json(dict(csrf=csrf,camera_ids=[1]))
+        message = await ws.receive(timeout=3)
+        self.assertEqual(message.type,WSMsgType.TEXT)
+        self.assertEqual((await ws.receive(timeout=3)).type,WSMsgType.BINARY)
+        data = dict(self.store.public_user(user),camera_ids=[],blocked=False)
+        self.store.edit_user(self.me['user']['id'],user['id'],data)
+        message = await ws.receive_json(timeout=3)
+        self.assertEqual(message,dict(type='revoked',camera_ids=[1]))
+        self.store.edit_user(self.me['user']['id'],user['id'],dict(data,blocked=True))
+        message = await ws.receive(timeout=3)
+        while message.type == WSMsgType.TEXT:
+            self.assertNotIn('1',message.json().get('cameras',{}))
+            message = await ws.receive(timeout=3)
+        self.assertEqual(message.type,WSMsgType.CLOSE)
+        self.assertEqual(ws.close_code,4401)
+        self.assertEqual((await self.client.get('/api/state',headers=headers)).status,401)
+
+    async def test_websocket_cannot_request_ungranted_camera(self):
+        _,headers,csrf = await self.viewer()
+        self.streams.config = {'test':True}
+        ws = await self.client.ws_connect('/api/live',headers=headers)
+        await ws.send_json(dict(csrf=csrf,camera_ids=[2]))
+        self.assertEqual((await ws.receive(timeout=3)).type,WSMsgType.CLOSE)
+        self.assertEqual(ws.close_code,4403)
+        self.assertFalse(self.streams.sources)
+
+    async def test_missing_connection_status_and_shared_camera(self):
+        _,headers,csrf = await self.viewer()
+        ws = await self.client.ws_connect('/api/live',headers=headers)
+        await ws.send_json(dict(csrf=csrf,camera_ids=[1]))
+        message = await ws.receive_json(timeout=3)
+        self.assertIn('не настроено',message['cameras']['1'])
+        self.streams.config = {'test':True}
+        while (await ws.receive(timeout=3)).type != WSMsgType.BINARY:
+            pass
+        other = await self.client.ws_connect('/api/live',headers=headers)
+        await other.send_json(dict(csrf=csrf,camera_ids=[1,1]))
+        while (await other.receive(timeout=3)).type != WSMsgType.BINARY:
+            pass
+        self.assertEqual(len(self.streams.sources),1)
+        await ws.close()
+        await other.close()
+
+    async def test_pwa_shell_and_cookie_flags(self):
+        response = await self.client.get('/manifest.webmanifest')
+        manifest = await response.json(content_type=None)
+        self.assertEqual(manifest['display'],'standalone')
+        for path in ('/','/app.js','/style.css','/sw.js','/icon-192.png','/icon-512.png','/apple-touch-icon.png'):
+            self.assertEqual((await self.client.get(path)).status,200)
+        response = await self.client.post('/api/auth/login',json=dict(login='admin',password=PASSWORD))
+        cookie = response.cookies[COOKIE]
+        self.assertTrue(cookie['httponly'])
+        self.assertEqual(cookie['samesite'],'Strict')
+
+
+if __name__ == '__main__':
+    unittest.main()
