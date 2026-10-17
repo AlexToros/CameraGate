@@ -4,7 +4,7 @@ const h = value => String(value ?? "").replace(/[&<>"\x27]/g, c => ({"&":"&amp;"
 let me, csrf, state, page = "wall", adminTab = "users", socket, socketEpoch = 0, saveTimer, saving = Promise.resolve(), refreshTimer, installPrompt, reconnectTimer;
 const mediaStreams = new Map();
 const cameraRatios = new Map();
-let tileObserver, previewCameraId = null;
+let tileObserver, cameraFullscreen = null;
 let dragged;
 let routeEpoch = 0;
 const roleName = role => role === "admin" ? "Администратор" : "Пользователь";
@@ -31,10 +31,9 @@ function bindForm(form, submit) {
     try { await submit(fields(form)); } catch (e) { if (error) error.textContent = e.message; else toast(e.message); } finally { button.disabled = false; }
   });
 }
-function dialog(title, body) { previewCameraId = null; modal.classList.remove("camera-preview"); modal.setAttribute("aria-label",title); modal.innerHTML = `<button class="close" aria-label="Закрыть">×</button><h2>${h(title)}</h2>${body}`; modal.querySelector(".close").onclick = () => modal.close(); modal.showModal(); }
+function dialog(title, body) { modal.setAttribute("aria-label",title); modal.innerHTML = `<button class="close" aria-label="Закрыть">×</button><h2>${h(title)}</h2>${body}`; modal.querySelector(".close").onclick = () => modal.close(); modal.showModal(); }
 modal.addEventListener("click", event => { if (event.target === modal) { const rect = modal.getBoundingClientRect(); if(event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) modal.close(); } });
-modal.addEventListener("close", () => { const preview=modal.querySelector(".preview");if(preview)clearTile(preview);previewCameraId = null; modal.classList.remove("camera-preview"); });
-function stopVideo() { clearTimeout(reconnectTimer); socketEpoch++; if(socket) socket.close(); socket = null; for(const stream of mediaStreams.values()) stream.destroy(); mediaStreams.clear(); }
+function stopVideo() { clearTimeout(reconnectTimer);socketEpoch++;if(socket)socket.close();socket=null;if(cameraFullscreen){cameraFullscreen.classList.remove("video-expanded");if(document.fullscreenElement===cameraFullscreen)document.exitFullscreen().catch(()=>{});cameraFullscreen=null;}for(const stream of mediaStreams.values())stream.destroy();mediaStreams.clear(); }
 function signedOut(message) { routeEpoch++; tileObserver?.disconnect(); document.body.classList.remove("fullscreen"); me = null; csrf = null; state = null; clearInterval(refreshTimer); clearTimeout(saveTimer); stopVideo(); if(modal.open) modal.close(); authView("login", null, message); }
 function authView(mode, invitation, message = "") {
   const setup = mode === "setup", invite = mode === "invite";
@@ -110,13 +109,14 @@ const icon = name => `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidde
 const screenCount = n => `${n} ${n === 1 ? "экран" : n < 5 ? "экрана" : "экранов"}`;
 function wall() {
   const content = document.querySelector("#content");
-  content.innerHTML = `<div class="toolbar"><div class="row"><button id="preset">${icon("grid")}<span>Сетка</span></button><button id="add-tile">${icon("plus")}<span>Экран</span></button></div><button id="fullscreen" class="icon-button" title="Во весь экран" aria-label="Во весь экран">${icon("expand")}</button></div>${!state.configured ? `<div class="banner">Подключение к камерам не настроено. ${me.role === "admin" ? "Введите параметры в разделе «Управление → Подключение»." : "Обратитесь к администратору."}</div>` : !state.cameras.length ? `<div class="banner">${me.role === "admin" ? h(state.connection_state) : "Доступных камер пока нет. Обратитесь к администратору."}</div>` : ""}<div class="wall" id="wall" aria-label="Камеры"></div><button class="exit-fullscreen" aria-label="Выйти из полноэкранного режима">Закрыть</button>`;
+  content.innerHTML = `<div class="toolbar"><div class="row"><button id="preset">${icon("grid")}<span>Сетка</span></button><button id="add-tile">${icon("plus")}<span>Экран</span></button><button id="start-playback" hidden>Начать просмотр</button></div><button id="fullscreen" class="icon-button" title="Во весь экран" aria-label="Во весь экран">${icon("expand")}</button></div>${!state.configured ? `<div class="banner">Подключение к камерам не настроено. ${me.role === "admin" ? "Введите параметры в разделе «Управление → Подключение»." : "Обратитесь к администратору."}</div>` : !state.cameras.length ? `<div class="banner">${me.role === "admin" ? h(state.connection_state) : "Доступных камер пока нет. Обратитесь к администратору."}</div>` : ""}<div class="wall" id="wall" aria-label="Камеры"></div><button class="exit-fullscreen" aria-label="Выйти из полноэкранного режима">Закрыть</button>`;
   document.querySelector("#add-tile").onclick = () => {
     if(state.layout.tiles.length >= 64) return toast("Можно добавить до 64 экранов");
     const tile = {id:uid(),camera_id:null,width:1,height:1};
     state.layout.tiles.push(tile); renderTiles(); changed(); chooseCamera(tile);
   };
   document.querySelector("#preset").onclick = gridOptions;
+  document.querySelector("#start-playback").onclick=resumeCameraPlayback;
   document.querySelector("#fullscreen").onclick = async () => { document.body.classList.add("fullscreen"); try { await document.documentElement.requestFullscreen(); } catch {} };
   document.querySelector(".exit-fullscreen").onclick = () => { document.body.classList.remove("fullscreen"); if(document.fullscreenElement) document.exitFullscreen(); };
   renderTiles(); connectVideo();
@@ -149,7 +149,7 @@ function renderTiles() {
   const cameras = new Map(state.cameras.map(c => [c.id,c]));
   wall.innerHTML = state.layout.tiles.length ? state.layout.tiles.map((tile,index) => {
     const name = cameras.get(tile.camera_id)?.name || "Выбрать камеру";
-    return `<article class="tile" data-tile="${h(tile.id)}" aria-label="Экран ${index+1}"><div class="tile-head" draggable="true"><span class="status-dot" aria-hidden="true"></span><button class="camera-trigger" aria-label="Камера экрана ${index+1}: ${h(name)}" title="${h(name)}">${h(name)}${icon("down")}</button><button class="tile-menu icon-button" title="Настройки экрана" aria-label="Настройки экрана ${index+1}">${icon("more")}</button></div><div class="picture"><video muted autoplay playsinline disableRemotePlayback hidden></video><span class="stream-state">${tile.camera_id ? "Подключение…" : "Выбрать камеру"}</span><button class="tile-expand icon-button" title="Увеличить" aria-label="Увеличить экран ${index+1}">${icon("expand")}</button></div></article>`;
+    return `<article class="tile" data-tile="${h(tile.id)}" aria-label="Экран ${index+1}"><div class="tile-head" draggable="true"><span class="status-dot" aria-hidden="true"></span><button class="camera-trigger" aria-label="Камера экрана ${index+1}: ${h(name)}" title="${h(name)}">${h(name)}${icon("down")}</button><button class="tile-menu icon-button" title="Настройки экрана" aria-label="Настройки экрана ${index+1}">${icon("more")}</button></div><div class="picture"><video muted autoplay playsinline webkit-playsinline disableRemotePlayback preload="auto"></video><canvas class="last-frame" hidden aria-hidden="true"></canvas><span class="stream-state">${tile.camera_id ? "Подключение…" : "Выбрать камеру"}</span><button class="tile-expand icon-button" title="Увеличить" aria-label="Увеличить экран ${index+1}">${icon("expand")}</button></div></article>`;
   }).join("") : `<div class="empty"><p>Добавьте экран или выберите сетку.</p><button class="primary" id="empty-add">Добавить экран</button></div>`;
   if(!state.layout.tiles.length) { document.querySelector("#empty-add").onclick = () => document.querySelector("#add-tile").click(); return; }
   const tilesById = new Map(state.layout.tiles.map(t => [t.id,t]));
@@ -165,8 +165,8 @@ function renderTiles() {
     element.style.setProperty("--ratio",cameraRatios.get(tile.camera_id) || 16/9);
     element.querySelector(".camera-trigger").onclick = () => { if(!dragged) chooseCamera(tile); };
     element.querySelector(".tile-menu").onclick = () => tileOptions(tile);
-    element.querySelector(".tile-expand").onclick = () => tile.camera_id ? previewCamera(tile) : chooseCamera(tile);
-    element.querySelector(".picture").ondblclick = () => { if(tile.camera_id) previewCamera(tile); };
+    element.querySelector(".tile-expand").onclick = () => tile.camera_id ? expandCamera(element) : chooseCamera(tile);
+    element.querySelector(".picture").ondblclick = event => { if(tile.camera_id && !event.target.closest("button")) expandCamera(element); };
     const header = element.querySelector(".tile-head");
     header.ondragstart = event => { dragged = tile.id; event.dataTransfer.setData("text/plain",tile.id); element.classList.add("dragging"); };
     header.ondragend = () => { dragged = null; wall.querySelectorAll(".tile").forEach(t => t.classList.remove("dragging","drop")); };
@@ -204,11 +204,17 @@ function tileOptions(tile) {
   modal.querySelector("#remove-current-tile").onclick = () => { state.layout.tiles = state.layout.tiles.filter(t => t.id !== tile.id); modal.close(); renderTiles(); changed(); subscribe(); };
   bindForm(modal.querySelector("form"), data => { tile.width = +data.width; tile.height = 1; const index = state.layout.tiles.indexOf(tile); state.layout.tiles.splice(index,1); state.layout.tiles.splice(+data.position-1,0,tile); modal.close(); renderTiles(); changed(); });
 }
-function previewCamera(tile) {
-  const camera = state.cameras.find(c => c.id === tile.camera_id); if(!camera) return;
-  dialog(camera.name,`<div class="preview tile"><div class="picture"><video muted autoplay playsinline disableRemotePlayback hidden></video><span class="stream-state">Подключение…</span></div></div>`);
-  modal.classList.add("camera-preview"); previewCameraId = tile.camera_id;
-  drawCached({camera_id:previewCameraId},modal.querySelector(".preview"));
+async function expandCamera(element) {
+  const picture=element.querySelector(".picture"),video=picture.querySelector("video");
+  if(document.fullscreenElement===picture) { await document.exitFullscreen();return; }
+  if(picture.classList.contains("video-expanded")) { picture.classList.remove("video-expanded");cameraFullscreen=null;return; }
+  cameraFullscreen=picture;
+  try {
+    if(picture.requestFullscreen) await picture.requestFullscreen({navigationUI:"hide"});
+    else if(video.webkitEnterFullscreen) {
+      video.addEventListener("webkitendfullscreen",()=>{cameraFullscreen=null;},{once:true});video.webkitEnterFullscreen();
+    } else picture.classList.add("video-expanded");
+  } catch { picture.classList.add("video-expanded"); }
 }
 function changed() { clearTimeout(saveTimer); saveTimer = setTimeout(save,500); }
 function save() {
@@ -218,7 +224,7 @@ function save() {
   return saving;
 }
 async function flushSave() { if(saveTimer) { clearTimeout(saveTimer); saveTimer = null; return save(); } return saving; }
-function clearTile(element) { element.classList.remove("live"); if(element.cameraStream)element.cameraStream.detach(element);element.cameraStream=null;const video=element.querySelector("video");if(video){video.pause();video.removeAttribute("src");video.load();video.hidden=true;}element.querySelector(".stream-state").textContent="Подключение…"; }
+function clearTile(element) { const saved=freezeCameraFrame(element);if(element.cameraStream)element.cameraStream.detach(element);element.cameraStream=null;const video=element.querySelector("video");if(video){video.pause();video.removeAttribute("src");video.load();video.hidden=true;}element.querySelector(".stream-state").textContent=saved ? "Восстанавливаем эфир" : "Подключение…"; }
 function drawCached(tile, element) {
   const stream=mediaStreams.get(tile.camera_id);if(!stream)return;
   if(element.cameraStream && element.cameraStream!==stream)clearTile(element);
@@ -238,12 +244,11 @@ function connectVideo() {
     if(epoch !== socketEpoch || !state) return;
     if(typeof event.data === "string") {
       const message = JSON.parse(event.data);
-      if(message.type === "revoked") { const denied = new Set(message.camera_ids); for(const tile of state.layout.tiles) if(denied.has(tile.camera_id)) tile.camera_id = null; if(denied.has(previewCameraId)) modal.close(); renderTiles(); subscribe(); refresh(); toast("Права доступа к камерам изменились"); }
+      if(message.type === "revoked") { const denied = new Set(message.camera_ids); for(const tile of state.layout.tiles) if(denied.has(tile.camera_id)) tile.camera_id = null; renderTiles(); subscribe(); refresh(); toast("Права доступа к камерам изменились"); }
       if(message.type === "status") {
         const tiles = new Map(state.layout.tiles.map(t => [t.id,t]));
         document.querySelectorAll(".tile").forEach(element => { const cid = tiles.get(element.dataset.tile)?.camera_id, status = message.cameras[cid]; if(status && status !== "Прямой эфир") { clearTile(element); element.querySelector(".stream-state").textContent = status; } });
       }
-      if(message.type === "status" && previewCameraId && message.cameras[previewCameraId] && message.cameras[previewCameraId] !== "Прямой эфир") { const preview = modal.querySelector(".preview"); if(preview) { clearTile(preview); preview.querySelector(".stream-state").textContent = message.cameras[previewCameraId]; } }
       return;
     }
     const view = new DataView(event.data), active = new Set(subscriptions()), tiles = new Map(state.layout.tiles.map(t => [t.id,t])), incoming = new Map();
@@ -265,7 +270,6 @@ function connectVideo() {
       }
     } catch { ws.close();return; }
     document.querySelectorAll(".tile").forEach(element => { const tile = tiles.get(element.dataset.tile); if(incoming.has(tile?.camera_id)) drawCached(tile,element); });
-    if(previewCameraId && incoming.has(previewCameraId)) { const preview = modal.querySelector(".preview"); if(preview) drawCached({camera_id:previewCameraId},preview); }
   };
   ws.onclose = event => { if(epoch !== socketEpoch) return; document.querySelectorAll(".tile").forEach(clearTile); if(event.code === 4401) signedOut("Сессия завершена. Войдите снова"); else if(event.code === 4403) { toast("Права доступа изменились"); refresh().then(() => { reconnectTimer = setTimeout(connectVideo,1500); }); } else reconnectTimer = setTimeout(connectVideo,2000); };
 }
@@ -329,9 +333,11 @@ window.addEventListener("beforeinstallprompt", event => { event.preventDefault()
 window.addEventListener("hashchange", () => { flushSave().finally(boot); });
 window.addEventListener("offline", () => { toast("Нет сети. Эфир возобновится после подключения."); });
 window.addEventListener("online", () => { if(me) { refresh(); connectVideo(); } else boot(); });
+window.addEventListener("camera-playback-policy",event=>{const button=document.querySelector("#start-playback");if(button)button.hidden=!event.detail.blocked;});
 document.addEventListener("visibilitychange", () => { if(document.hidden) { flushSave(); stopVideo(); } else if(me && page === "wall") { refresh(); connectVideo(); } });
-document.addEventListener("fullscreenchange", () => { if(!document.fullscreenElement) document.body.classList.remove("fullscreen"); });
+document.addEventListener("fullscreenchange", () => { if(cameraFullscreen && document.fullscreenElement!==cameraFullscreen && !cameraFullscreen.classList.contains("video-expanded"))cameraFullscreen=null;if(!document.fullscreenElement)document.body.classList.remove("fullscreen"); });
+document.addEventListener("keydown",event=>{if(event.key==="Escape" && cameraFullscreen?.classList.contains("video-expanded")){cameraFullscreen.classList.remove("video-expanded");cameraFullscreen=null;}});
 let resizeTimer;
-window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if(me && page === "wall") renderTiles(); },150); });
+window.addEventListener("resize", () => { clearTimeout(resizeTimer);resizeTimer=setTimeout(()=>{const wall=document.querySelector("#wall");if(!me || page!=="wall" || cameraFullscreen?.isConnected || !wall)return;const columns=Math.min(state.layout.columns,Math.max(1,Math.floor((wall.clientWidth-16)/150)));if(columns!==+wall.style.getPropertyValue("--columns"))renderTiles();},150); });
 if("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
 boot();

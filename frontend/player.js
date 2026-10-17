@@ -1,6 +1,27 @@
 /* Compressed fMP4 playback. No credentials, transcoding or unbounded queues. */
 (() => {
   const MAX_BYTES = 2 * 1024 * 1024;
+  const blockedPlayers=new Set();
+  function playbackPolicy() { window.dispatchEvent(new CustomEvent("camera-playback-policy",{detail:{blocked:blockedPlayers.size>0}})); }
+  function resumePlayback() { for(const player of [...blockedPlayers])player.play(true); }
+  document.addEventListener("pointerdown",resumePlayback,{capture:true});
+  document.addEventListener("keydown",resumePlayback,{capture:true});
+  function captureFrame(element,force=false) {
+    const video=element.querySelector("video"),canvas=element.querySelector(".last-frame");
+    if(!video || !canvas || video.readyState<2 || video.error || video.seeking || !video.videoWidth)return;
+    if(!force && Date.now()-(+canvas.dataset.captured||0)<1000)return;
+    try {
+      if(canvas.width!==video.videoWidth || canvas.height!==video.videoHeight) { canvas.width=video.videoWidth;canvas.height=video.videoHeight; }
+      canvas.getContext("2d").drawImage(video,0,0);canvas.dataset.captured=Date.now();
+    } catch { /* A snapshot failure must not interrupt live playback. */ }
+  }
+  function freezeFrame(element) {
+    captureFrame(element);
+    const canvas=element.querySelector(".last-frame"),saved=Boolean(canvas?.dataset.captured);
+    if(canvas)canvas.hidden=!saved;
+    element.classList.toggle("stale",saved);element.classList.remove("live");
+    return saved;
+  }
   function timestamp(data) {
     const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
     function find(start,end) {
@@ -20,8 +41,11 @@
   class Player {
     constructor(stream,element) {
       this.stream=stream;this.element=element;this.queue=[];this.head=0;this.bytes=0;this.closed=false;this.offset=null;this.started=false;
-      this.video=element.querySelector("video");
-      this.video.muted=true;this.video.autoplay=true;this.video.playsInline=true;this.video.disableRemotePlayback=true;
+      this.video=element.querySelector("video");this.events=new AbortController();
+      this.video.defaultMuted=true;this.video.muted=true;this.video.autoplay=true;this.video.playsInline=true;this.video.disableRemotePlayback=true;this.video.controls=false;this.video.preload="auto";
+      // WebKit evaluates autoplay visibility before the first decoded frame.
+      // Keep the muted inline video visible beneath the status/snapshot layers.
+      this.video.hidden=false;
       const Media=window.ManagedMediaSource || window.MediaSource;
       if(!Media || !Media.isTypeSupported(stream.mime)) { this.fail("Браузер не поддерживает кодек этой камеры. Откройте в совместимом браузере.");return; }
       try {
@@ -36,20 +60,32 @@
             this.pump();
           } catch { this.fail("Не удалось запустить видео в этом браузере"); }
         },{once:true});
-        this.video.addEventListener("loadeddata",()=>this.visible(),{once:true});
-        this.video.addEventListener("playing",()=>this.visible());
-        this.video.addEventListener("error",()=>{if(!this.closed)this.fail("Браузер не смог декодировать видео камеры");});
+        this.video.addEventListener("loadeddata",()=>{captureFrame(this.element,true);this.play();},{once:true,signal:this.events.signal});
+        this.video.addEventListener("playing",()=>this.visible(),{signal:this.events.signal});
+        this.video.addEventListener("timeupdate",()=>captureFrame(this.element),{signal:this.events.signal});
+        this.video.addEventListener("error",()=>{if(!this.closed){console.warn("camera_media_error",{code:this.video.error?.code,detail:this.video.error?.message});this.fail("Восстанавливаем видео…");}},{signal:this.events.signal});
         this.enqueue(stream.init);
         for(const fragment of stream.fragments)this.enqueue(fragment,true);
       } catch { this.fail("Не удалось запустить видеоплеер"); }
     }
     visible() {
       if(this.closed || !this.element.isConnected)return;
-      this.video.hidden=false;this.element.classList.add("live");
+      this.video.hidden=false;this.element.classList.add("live");this.element.classList.remove("stale");
+      const canvas=this.element.querySelector(".last-frame");if(canvas)canvas.hidden=true;
+      captureFrame(this.element);
       if(this.video.videoWidth && this.video.videoHeight) {
         const ratio=this.video.videoWidth/this.video.videoHeight;
         this.element.style.setProperty("--ratio",ratio);this.stream.onRatio(ratio);
       }
+    }
+    play(gesture=false) {
+      if(this.closed || this.playPending || (!gesture && blockedPlayers.has(this)) || !this.video.paused)return;
+      this.video.muted=true;this.playPending=true;
+      const result=this.video.play();
+      if(!result) { this.playPending=false;return; }
+      result.then(()=>{blockedPlayers.delete(this);playbackPolicy();}).catch(error=>{
+        if(!this.closed && error.name==="NotAllowedError") { blockedPlayers.add(this);playbackPolicy(); }
+      }).finally(()=>{this.playPending=false;});
     }
     enqueue(data,media=false) {
       if(this.closed)return;
@@ -66,7 +102,7 @@
           if(!this.started || end-this.video.currentTime>1.5 || this.video.currentTime<start) {
             this.video.currentTime=Math.max(start,end-.25);this.started=true;
           }
-          this.video.play().catch(()=>{});
+          this.play();
           const earliest=ranges.start(0);
           if(end-earliest>8 && this.video.currentTime>earliest+4) { this.buffer.remove(earliest,this.video.currentTime-3);return; }
         }
@@ -83,6 +119,8 @@
       this.retryAt=Date.now()+5000;
     }
     close() {
+      if(this.closed)return;
+      freezeFrame(this.element);this.events.abort();blockedPlayers.delete(this);playbackPolicy();
       this.closed=true;this.queue=[];this.head=0;this.bytes=0;
       if(this.video) { this.video.hidden=true;this.video.pause();this.video.removeAttribute("src");this.video.load(); }
       if(this.url)URL.revokeObjectURL(this.url);
@@ -109,4 +147,7 @@
     destroy() { this.releasePlayers();this.fragments=[];this.bytes=0; }
   }
   window.CameraStream=CameraStream;
+  window.captureCameraFrame=captureFrame;
+  window.freezeCameraFrame=freezeFrame;
+  window.resumeCameraPlayback=resumePlayback;
 })();
