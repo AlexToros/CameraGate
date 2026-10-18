@@ -43,7 +43,8 @@ def gateway_app(token, pool=None):
     async def catalog(request):
         data = await request.json()
         await configure(data['config'])
-        return web.json_response(await streams.catalog())
+        channels = await streams.catalog()
+        return web.json_response(dict(channels=channels, device=getattr(streams, 'device_info', None)))
     async def live(request):
         ws = web.WebSocketResponse(heartbeat=15,max_msg_size=16384)
         await ws.prepare(request)

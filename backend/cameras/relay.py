@@ -107,6 +107,7 @@ def pack_encoded(sources, sent):
 class RelayPool:
     def __init__(self, config=None):
         self.config = config
+        self.device_info = None
         self.sources, self.persistent = {}, set()
         self.changed = asyncio.Event()
         self.task = None
@@ -224,6 +225,7 @@ class RelayPool:
             delay = min(30, delay*2)
 
     async def replace(self, config):
+        self.device_info = None
         self.config = None
         if self.task:
             self.task.cancel()
@@ -232,6 +234,10 @@ class RelayPool:
         self.cache_bytes = 0
         self.config = config
         self._ensure(self.persistent)
+
+    def read_catalog(self, result):
+        from .streams import StreamPool
+        return StreamPool.read_catalog(self, result)
 
     async def catalog(self):
         # Catalog is one separate bulk operation; it does not start decoders.

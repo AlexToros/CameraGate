@@ -6,7 +6,35 @@ from unittest.mock import Mock, patch
 
 from backend.cameras.vesta import Frames, HEADER, Viewer, IsolatedViewer, Transport, frame_health, RequestTimeout
 from backend.cameras.vesta import decoder_command
-from backend.cameras.streams import worker_command
+from backend.cameras.streams import worker_command, StreamPool
+from backend.cameras.vesta import recorder_details
+
+
+class RecorderDetailsTests(unittest.TestCase):
+    def test_reads_one_name_for_entire_catalog_without_returning_other_fields(self):
+        transport=Mock()
+        transport.request.return_value=(None, {'General':{'MachineName':'  Дом  34\n', 'Secret':'private'}})
+        details=recorder_details(transport,36)
+        self.assertEqual(details,dict(name='Дом 34',channel_count=36))
+        transport.request.assert_called_once_with(1042,transport.command.return_value,timeout=3)
+
+    def test_nested_general_configuration_contains_the_machine_name(self):
+        transport=Mock()
+        transport.request.return_value=(None, {'General':{'General':{'MachineName':'NVR'}}})
+        self.assertEqual(recorder_details(transport,36),dict(name='NVR',channel_count=36))
+
+    def test_optional_metadata_failure_preserves_channel_count(self):
+        transport=Mock()
+        transport.request.side_effect=RequestTimeout(1042)
+        self.assertEqual(recorder_details(transport,36),dict(name=None,channel_count=36))
+        transport.request.assert_called_once()
+
+    def test_catalog_allowlists_metadata_and_accepts_legacy_gateway(self):
+        pool=StreamPool()
+        self.assertEqual(pool.read_catalog(dict(channels=['A','B'],device=dict(name='Recorder',Password='private',channel_count=99))),['A','B'])
+        self.assertEqual(pool.device_info,dict(name='Recorder',channel_count=2))
+        self.assertEqual(pool.read_catalog(['C']),['C'])
+        self.assertEqual(pool.device_info,dict(name=None,channel_count=1))
 
 
 class RuntimeCommandTests(unittest.TestCase):

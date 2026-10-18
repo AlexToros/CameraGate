@@ -86,6 +86,7 @@ class Source:
 class StreamPool:
     def __init__(self, config=None):
         self.config = config
+        self.device_info = None
         self.sources = {}
         self.gateway = None
 
@@ -101,6 +102,7 @@ class StreamPool:
         return {cid: self.sources[cid] for cid in camera_ids}
 
     async def replace(self, config):
+        self.device_info = None
         previous, self.sources, self.config = self.sources, {}, config
         tasks = tuple(s.task for s in previous.values())
         for task in tasks:
@@ -114,9 +116,21 @@ class StreamPool:
             output, _ = await asyncio.wait_for(process.communicate((json.dumps(self.config)+'\n').encode()), 45)
             if process.returncode:
                 raise RuntimeError('catalog unavailable')
-            return json.loads(output)
+            return self.read_catalog(json.loads(output))
         finally:
             await terminate(process)
+
+    def read_catalog(self, result):
+        # Older private gateways returned only the names array.
+        if isinstance(result, list):
+            self.device_info = dict(name=None, channel_count=len(result))
+            return result
+        channels = result['channels']
+        device = result.get('device') or {}
+        name = device.get('name')
+        self.device_info = dict(name=name[:120] if isinstance(name, str) else None,
+                               channel_count=len(channels))
+        return channels
 
     async def close(self):
         await self.replace(None)

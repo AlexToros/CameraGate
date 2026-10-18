@@ -31,6 +31,7 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
                     remote = RemotePool(config)
                 try:
                     self.assertEqual(await remote.catalog(),['Камера 1','Камера 2'])
+                    self.assertEqual(remote.device_info,dict(name='Дом 34',channel_count=2))
                     deadline = time.monotonic()+5
                     sources = remote.subscribe([1,2,1])
                     while not all(s.frames for s in sources.values()) and time.monotonic()<deadline:
@@ -42,6 +43,7 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(remote.subscribe([1])[1],sources[1])
                     await remote.replace(dict(config,PASSWORD='new-test-password'))
                     self.assertFalse(remote.sources)
+                    self.assertIsNone(remote.device_info)
                 finally:
                     await remote.close()
         finally:

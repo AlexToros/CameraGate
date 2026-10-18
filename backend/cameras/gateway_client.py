@@ -76,4 +76,4 @@ class RemotePool(RelayPool):
             async with session.post(self.url+'/catalog',json={'config':self.config}) as response:
                 if response.status != 200:
                     raise RuntimeError('Gateway unavailable')
-                return await response.json()
+                return self.read_catalog(await response.json())

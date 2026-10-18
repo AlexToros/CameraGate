@@ -93,8 +93,25 @@ function personFields(value) {
 function accessFields(value) {
   return `<div class="user-access" ${value.role==="admin" ? "hidden" : ""}><h3>Доступ</h3><div class="selection-summary"><button type="button" data-access="group_ids"><span>Группы</span><span data-summary="group_ids">${groupCount(value.group_ids.length)}</span>${icon("chevron")}</button><button type="button" data-access="camera_ids"><span>Камеры</span><span data-summary="camera_ids">${cameraCount(value.camera_ids.length)}</span>${icon("chevron")}</button></div></div><p class="admin-access muted" ${value.role!=="admin" ? "hidden" : ""}>Доступ ко всем камерам</p>`;
 }
+function connectionSummary(connection) {
+  const device=connection.device, name=device?.name ? ` «${device.name}»` : "";
+  const summary=!connection.configured ? "Регистратор не подключён" : connection.status==="connected" ? `Подключён регистратор${name}` : connection.status==="error" ? "Не удалось подключиться к регистратору" : "Проверяем подключение к регистратору…";
+  return `<p>${h(summary)}</p>${connection.status==="connected" && device ? `<p class="muted">${h(quantity(device.channel_count,["канал","канала","каналов"]))}</p>` : ""}`;
+}
+function followConnection(form) {
+  // Update the status without replacing the form or losing credentials being typed.
+  setTimeout(async()=>{
+    if(!form.isConnected)return;
+    try {
+      const connection=await api("/api/admin/connection");
+      if(!form.isConnected)return;
+      form.querySelector(".connection-status").innerHTML=connectionSummary(connection);
+      if(connection.status==="checking")followConnection(form);
+    } catch(error){if(form.isConnected && error.status!==401)form.querySelector(".connection-status").textContent=error.message;}
+  },2000);
+}
 async function adminEditor(body,section,item) {
-  let value, title, extra="",submit="Сохранить", back=`#/admin/${section}`,save;
+  let connectionStatus, value, title, extra="",submit="Сохранить", back=`#/admin/${section}`,save;
   if(section==="users") {
     const data=await api("/api/admin/users");if(!body.isConnected)return;
     value=data.users.find(user=>user.id===+item);if(!value)throw new Error("Пользователь не найден");
@@ -121,7 +138,8 @@ async function adminEditor(body,section,item) {
   } else if(section==="connection") {
     const connection=await api("/api/admin/connection");if(!body.isConnected)return;
     value={ID:"",UserName:"",Password:""};title="Подключение";back="#/admin";
-    extra=`<p class="muted">${h(connection.configured ? "Параметры заданы" : "Не настроено")}</p><p class="field-hint">Введите все три параметра. Сохранённые значения скрыты.</p>`;
+    connectionStatus=connection.status;
+    extra=`<div class="connection-status" role="status">${connectionSummary(connection)}</div><p class="field-hint">${connection.configured ? "Чтобы подключить другой регистратор, введите его Cloud ID, логин и пароль." : "Введите Cloud ID, логин и пароль регистратора."}</p>`;
     save=async data=>api("/api/admin/connection","PUT",data);
   } else throw new Error("Раздел не найден");
   if(!body.isConnected)return;
@@ -138,6 +156,7 @@ async function adminEditor(body,section,item) {
   const fields=person ? `${section==="users" ? `<p class="muted">${h(value.login)}</p>` : ""}${personFields(data)}${section==="users" ? `<label class="switch-row"><span>Заблокирован</span><input type="checkbox" name="blocked" ${data.blocked ? "checked" : ""}></label>` : ""}${accessFields(data)}` : section==="groups" ? `<label>Название<input name="name" required maxlength="100" value="${h(data.name)}" ${value.builtin ? "readonly" : ""}></label>${extra}<div class="selection-summary"><button type="button" data-access="camera_ids"><span>Камеры</span><span data-summary="camera_ids">${cameraCount(data.camera_ids.length)}</span>${icon("chevron")}</button></div>` : section==="cameras" ? `<label>Название<input name="name" required maxlength="120" value="${h(data.name)}"></label>` : `${extra}<label>Cloud ID<input name="ID" required maxlength="128" autocomplete="off" autocapitalize="none" spellcheck="false"></label><label>Логин<input name="UserName" required maxlength="128" autocomplete="off" autocapitalize="none" spellcheck="false"></label><label>Пароль<input name="Password" type="password" required maxlength="256" autocomplete="new-password"></label>`;
   body.innerHTML=`<form id="admin-edit-form" class="admin-editor" autocomplete="off"><header class="editor-head"><button type="button" class="editor-back icon-button" aria-label="Назад">${icon("back")}</button><h2>${h(title)}</h2><button class="primary" type="submit">${submit}</button></header><div class="form-fields stack">${fields}<div class="error" role="alert"></div></div></form>`;
   const form=body.querySelector("form");
+  if(connectionStatus==="checking")followConnection(form);
   if(section==="connection")form.querySelectorAll("input").forEach(input=>input.value=data[input.name]);
   form.querySelector(".editor-back").onclick=()=>navigateTo(back);
   const sync=()=>{for(const input of form.querySelectorAll("input,select")){data[input.name]=input.type==="checkbox" ? input.checked : input.value;}if(person){form.querySelector(".user-access").hidden=data.role==="admin";form.querySelector(".admin-access").hidden=data.role!=="admin";}};

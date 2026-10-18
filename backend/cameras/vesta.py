@@ -839,6 +839,22 @@ def worker_main():
         os._exit(0)
 
 
+def recorder_details(transport, count):
+    # Optional read-only metadata. Missing support must not break the catalog.
+    name = None
+    try:
+        _, response = transport.request(1042, transport.command('General'), timeout=3)
+        general = response.get('General')
+        if isinstance(general, dict) and isinstance(general.get('General'), dict):
+            general = general['General']
+        value = general.get('MachineName') if isinstance(general, dict) else None
+        if isinstance(value, str):
+            name = ' '.join(value.split())[:120] or None
+    except (ConnectionError, TimeoutError, ValueError, TypeError, KeyError):
+        pass
+    return dict(name=name, channel_count=count)
+
+
 def catalog_main():
     # Silence native output before loading the library; return only the catalog.
     pipe = os.fdopen(os.dup(1), 'w', buffering=1)
@@ -857,8 +873,10 @@ def catalog_main():
         _, result = transport.request(1048, transport.command('ChannelTitle'))
         names = result.get('ChannelTitle', [])
         count = max(0, min(int(info['ChannelNum']), 256))
-        pipe.write(json.dumps([str(names[i])[:120] if i < len(names) else 'Камера %d' % (i+1)
-                               for i in range(count)], ensure_ascii=False) + '\n')
+        channels = [str(names[i])[:120] if i < len(names) else 'Камера %d' % (i+1)
+                    for i in range(count)]
+        device = recorder_details(transport, count)
+        pipe.write(json.dumps(dict(channels=channels, device=device), ensure_ascii=False) + '\n')
         pipe.flush()
         os._exit(0)
     except Exception as error:

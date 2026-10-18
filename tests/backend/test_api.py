@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from aiohttp import CookieJar, WSMsgType, WSServerHandshakeError
 from aiohttp.test_utils import TestClient, TestServer
-from backend.server import create_app, COOKIE, Portal
+from backend.server import create_app, COOKIE, Portal, PORTAL
 from backend.store import Problem
 from backend.paths import FRONTEND
 from backend.cameras.relay import EncodedSource
@@ -43,6 +43,7 @@ class ProxyThrottleTests(unittest.TestCase):
 class FakeStreams:
     def __init__(self):
         self.config = None
+        self.device_info = None
         self.sources = {}
         self.image = (FRONTEND/'icons/icon-192.png').read_bytes()
         self.persistent = set()
@@ -58,8 +59,10 @@ class FakeStreams:
         return {cid:self.sources[cid] for cid in values}
     async def replace(self, config):
         self.config = config
+        self.device_info = None
         self.sources = {}
     async def catalog(self):
+        self.device_info = dict(name='Дом 34',channel_count=2)
         return ['Камера 1','Камера 2']
     async def close(self):
         pass
@@ -110,6 +113,36 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             body = await (await self.client.get(path)).text()
             for value in secret.values():
                 self.assertNotIn(value,body)
+
+    async def test_connection_summary_tracks_success_failure_and_credential_replacement(self):
+        portal=self.app[PORTAL]
+        initial=await (await self.client.get('/api/admin/connection')).json()
+        self.assertEqual(initial['status'],'not_configured')
+        self.assertIsNone(initial['device'])
+        self.streams.config=dict(SERIAL_NUM='private-id',USERNAME='private-user',PASSWORD='private-password')
+        await portal.sync()
+        summary=await (await self.client.get('/api/admin/connection')).json()
+        self.assertEqual(summary['status'],'connected')
+        self.assertEqual(summary['device'],dict(name='Дом 34',channel_count=2))
+        with patch.object(self.streams,'catalog',side_effect=RuntimeError('unavailable')):
+            await portal.sync()
+        failed=await (await self.client.get('/api/admin/connection')).json()
+        self.assertEqual(failed['status'],'error')
+        # Keep the new credentials unverified until their own catalog succeeds.
+        gate=asyncio.Event()
+        async def delayed_catalog():
+            await gate.wait()
+            return await FakeStreams.catalog(self.streams)
+        with patch.object(self.streams,'catalog',side_effect=delayed_catalog):
+            response=await self.client.put('/api/admin/connection',json=dict(ID='new-id',UserName='new-user',Password='new-password'),headers=self.headers)
+            self.assertEqual(response.status,200)
+            changed=await (await self.client.get('/api/admin/connection')).json()
+            self.assertEqual(changed['status'],'checking')
+            self.assertIsNone(changed['device'])
+            gate.set()
+            await asyncio.gather(*(task for task in tuple(portal.background) if task.get_coro().__name__=='sync'))
+        _,headers,_=await self.viewer()
+        self.assertEqual((await self.client.get('/api/admin/connection',headers=headers)).status,403)
 
     async def test_active_stream_revocation_and_block(self):
         user,headers,csrf = await self.viewer()

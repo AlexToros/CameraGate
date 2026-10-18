@@ -43,6 +43,7 @@ class Portal:
         self.limits = defaultdict(deque)
         self.sync_lock = asyncio.Lock()
         self.sync_state = 'Список камер ещё не обновлён'
+        self.connection_status = 'checking' if streams and streams.config else 'not_configured'
         self.background = set()
         self.sockets = set()
 
@@ -105,8 +106,10 @@ class Portal:
             return
         async with self.sync_lock:
             if not self.streams.config:
+                self.connection_status = 'not_configured'
                 self.sync_state = 'Параметры подключения не заданы'
                 return
+            self.connection_status = 'checking'
             self.sync_state = 'Получение списка камер…'
             try:
                 attempt = 0
@@ -120,8 +123,10 @@ class Portal:
                             raise
                         await asyncio.sleep(1)
                 await self.call(self.store.sync_cameras, names)
+                self.connection_status = 'connected'
                 self.sync_state = 'Список камер обновлён'
             except Exception:
+                self.connection_status = 'error'
                 self.sync_state = 'Не удалось подключиться к регистратору. Проверьте параметры подключения и сеть'
 
     async def api(self, request):
@@ -185,9 +190,12 @@ class Portal:
                 await self.call(self.store.set_connection,user['id'],data)
                 config = await self.call(self.store.connection)
                 await self.streams.replace(config)
+                self.connection_status = 'checking'
+                self.sync_state = 'Получение списка камер…'
             self.background_task(self.sync())
         elif path == '/api/admin/connection' and method == 'GET':
-            return web.json_response(dict(configured=bool(self.streams.config),state=self.sync_state))
+            return web.json_response(dict(configured=bool(self.streams.config),state=self.sync_state,
+                status=self.connection_status,device=getattr(self.streams, 'device_info', None)))
         elif path == '/api/admin/sync' and method == 'POST':
             self.background_task(self.sync())
         else:
