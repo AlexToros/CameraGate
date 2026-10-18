@@ -15,23 +15,45 @@ function adminPath() { return location.hash.slice(2).split("/").filter(Boolean).
 function objectRow({id,name,detail,tag="",kind}) {
   return `<button type="button" class="object-row" data-object="${id}" data-kind="${kind}"><span class="object-copy"><span class="object-name">${h(name)}</span>${detail ? `<span class="object-detail">${h(detail)}</span>` : ""}</span>${tag ? `<span class="pill blocked">${h(tag)}</span>` : ""}${icon("chevron")}</button>`;
 }
-function sectionHead(title, action="") {
-  return `<div class="section-head"><button class="admin-back icon-button" aria-label="Назад к разделам">${icon("back")}</button><h2>${h(title)}</h2>${action}</div>`;
+function sectionHead(title, action="", back=false) {
+  return `<div class="section-head">${back ? `<button class="admin-back icon-button" aria-label="Назад">${icon("back")}</button>` : `<button class="admin-menu icon-button" aria-label="Разделы управления" aria-expanded="false" aria-controls="admin-navigation">${icon("menu")}</button>`}<h2>${h(title)}</h2>${action}</div>`;
+}
+function bindAdminHeader(body, back="#/admin/users") {
+  const previous=body.querySelector(".admin-back"), menu=body.querySelector(".admin-menu");
+  if(previous)previous.onclick=()=>navigateTo(back);
+  if(menu){menu.setAttribute("aria-expanded",String(!!document.querySelector(".admin-nav.is-open")));menu.onclick=()=>toggleAdminMenu(true);}
+}
+function toggleAdminMenu(open) {
+  const nav=document.querySelector(".admin-nav"), scrim=document.querySelector(".admin-scrim");
+  if(!nav || !scrim)return;
+  nav.classList.toggle("is-open",open);scrim.hidden=!open;
+  document.body.classList.toggle("admin-menu-open",open);
+  const button=document.querySelector(".admin-menu");
+  button?.setAttribute("aria-expanded",String(open));
+  document.querySelector("#admin-body").inert=open;
+  document.querySelector(".header").inert=open;
+  if(open)(nav.querySelector('[aria-current="page"]') || nav.querySelector("a")).focus();
+  else button?.focus({preventScroll:true});
 }
 function bindAdminRows(body, section) {
   body.querySelectorAll("[data-object]").forEach(button => button.onclick=()=>navigateTo(`#/admin/${section}/${button.dataset.object}`));
 }
 async function admin() {
   if(!me || me.role!=="admin" || page!=="admin")return;
-  const [section, item]=adminPath(), content=document.querySelector("#content");
-  const valid=Object.hasOwn(adminSections,section);
+  let [section, item]=adminPath();
+  const content=document.querySelector("#content");
+  if(!Object.hasOwn(adminSections,section)) {
+    section="users";item=undefined;
+    history.replaceState(null,"","#/admin/users");activeLocation=location.hash;
+  }
   if(adminDraft?.route!==location.hash)adminDraft=null;
   root.classList.toggle("editing",!!item);
-  content.innerHTML=`<section class="admin ${valid ? "has-section" : "admin-index"}">${valid ? "" : '<h2 class="admin-heading">Управление</h2>'}<nav class="admin-nav" aria-label="Управление">${Object.entries(adminSections).map(([key,label])=>`<a href="#/admin/${key}" ${key===section ? 'aria-current="page"' : ""}><span>${label}</span>${icon("chevron")}</a>`).join("")}</nav><div id="admin-body" class="surface">${valid ? sectionHead("Загрузка…") : ""}</div></section>`;
-  content.querySelectorAll(".admin-nav a").forEach(link=>link.onclick=event=>{event.preventDefault();navigateTo(link.getAttribute("href"));});
+  content.innerHTML=`<section class="admin"><button class="admin-scrim" aria-label="Закрыть меню" hidden></button><nav id="admin-navigation" class="admin-nav" aria-label="Управление"><div class="admin-menu-head"><span>Управление</span><button class="icon-button admin-menu-close" aria-label="Закрыть меню">×</button></div>${Object.entries(adminSections).map(([key,label])=>`<a href="#/admin/${key}" ${key===section ? 'aria-current="page"' : ""}>${label}</a>`).join("")}</nav><div id="admin-body" class="surface">${sectionHead("Загрузка…","",!!item)}</div></section>`;
+  content.querySelectorAll(".admin-nav a").forEach(link=>link.onclick=event=>{event.preventDefault();toggleAdminMenu(false);navigateTo(link.getAttribute("href"));});
+  content.querySelector(".admin-scrim").onclick=()=>toggleAdminMenu(false);
+  content.querySelector(".admin-menu-close").onclick=()=>toggleAdminMenu(false);
   const body=content.querySelector("#admin-body");
-  if(!valid)return;
-  body.querySelector(".admin-back").onclick=()=>navigateTo(item ? `#/admin/${section}` : "#/admin");
+  bindAdminHeader(body,`#/admin/${section}`);
   try {
     if(item) { await adminEditor(body,section,item);return; }
     const create=section==="users" || section==="invites" ? `<button class="primary" id="new-invite" aria-label="Пригласить">${icon("plus")}<span>Пригласить</span></button>` : section==="groups" ? `<button class="icon-button primary" id="new-group" aria-label="Создать группу">${icon("plus")}</button>` : section==="cameras" ? `<button class="icon-button" id="sync" aria-label="Обновить список камер">${icon("refresh")}</button>` : "";
@@ -50,7 +72,7 @@ async function admin() {
       await adminEditor(body,section,"settings");return;
     }
     body.innerHTML=`${sectionHead(adminSections[section],create)}${section==="cameras" || section==="users" ? `<label class="search-field"><span class="sr-only">${section==="cameras" ? "Найти камеру" : "Найти пользователя"}</span><input type="search" id="object-search" placeholder="Поиск" autocomplete="off"></label>` : ""}<div class="object-list">${rows.join("") || '<p class="empty">Пока пусто</p>'}</div><p class="empty search-empty" hidden>Ничего не найдено</p>`;
-    body.querySelector(".admin-back").onclick=()=>navigateTo("#/admin");
+    bindAdminHeader(body);
     bindAdminRows(body,section);
     const search=body.querySelector("#object-search");
     if(search) {
@@ -61,7 +83,7 @@ async function admin() {
     const group=body.querySelector("#new-group");if(group)group.onclick=()=>navigateTo("#/admin/groups/new");
     const sync=body.querySelector("#sync");if(sync)sync.onclick=async()=>{sync.disabled=true;try{await api("/api/admin/sync","POST",{});toast("Обновление списка запущено");}catch(error){toast(error.message);}finally{sync.disabled=false;}};
   } catch(error) {
-    if(body.isConnected){root.classList.remove("editing");body.innerHTML=`${sectionHead("Ошибка")}<div class="form-fields"><p class="error" role="alert">${h(error.message)}</p><button id="retry-admin">Повторить</button></div>`;body.querySelector(".admin-back").onclick=()=>navigateTo(item ? `#/admin/${section}` : "#/admin");body.querySelector("#retry-admin").onclick=admin;}
+    if(body.isConnected){root.classList.remove("editing");body.innerHTML=`${sectionHead("Ошибка","",!!item)}<div class="form-fields"><p class="error" role="alert">${h(error.message)}</p><button id="retry-admin">Повторить</button></div>`;bindAdminHeader(body,`#/admin/${section}`);body.querySelector("#retry-admin").onclick=admin;}
   }
 }
 
@@ -84,8 +106,8 @@ async function adminEditor(body,section,item) {
   } else if(section==="invites") {
     const data=await api("/api/admin/invites");if(!body.isConnected)return;
     const invite=data.invitations.find(value=>value.id===+item);if(!invite)throw new Error("Приглашение не найдено");
-    body.innerHTML=`${sectionHead("Приглашение")}<div class="form-fields"><h3>${h(invite.last_name)} ${h(invite.first_name)}</h3><p class="muted">${roleName(invite.role)}</p><button class="danger" id="revoke-invite">Отозвать приглашение</button></div>`;
-    body.querySelector(".admin-back").onclick=()=>navigateTo(back);
+    body.innerHTML=`${sectionHead("Приглашение","",true)}<div class="form-fields"><h3>${h(invite.last_name)} ${h(invite.first_name)}</h3><p class="muted">${roleName(invite.role)}</p><button class="danger" id="revoke-invite">Отозвать приглашение</button></div>`;
+    bindAdminHeader(body,back);
     body.querySelector("#revoke-invite").onclick=async()=>{if(!confirm("Отозвать приглашение?"))return;try{await api(`/api/admin/invites/${item}`,"DELETE",{});await navigateTo(back);}catch(error){toast(error.message);}};return;
   } else if(section==="groups") {
     value=item==="new" ? {name:"",camera_ids:[]} : state.groups.find(group=>group.id===+item);
@@ -164,7 +186,19 @@ function finishAdminPicker() {
 function showCreatedInvite(body,token,back) {
   adminDraft=null;
   const link=`${location.origin}/#/invite/${token}`;
-  body.innerHTML=`${sectionHead("Приглашение")}<div class="form-fields stack"><p>Ссылка действует 7 дней. Скопируйте её до закрытия.</p><a class="invite-link" href="${h(link)}" target="_blank" rel="noopener noreferrer">${h(link)}</a><button class="primary" id="copy-link">Копировать ссылку</button></div>`;
-  body.querySelector(".admin-back").onclick=()=>navigateTo(back);
+  body.innerHTML=`${sectionHead("Приглашение","",true)}<div class="form-fields stack"><p>Ссылка действует 7 дней. Скопируйте её до закрытия.</p><a class="invite-link" href="${h(link)}" target="_blank" rel="noopener noreferrer">${h(link)}</a><button class="primary" id="copy-link">Копировать ссылку</button></div>`;
+  bindAdminHeader(body,back);
   body.querySelector("#copy-link").onclick=async()=>{try{await navigator.clipboard.writeText(link);toast("Ссылка скопирована");}catch{toast("Выделите и скопируйте ссылку");}};
 }
+
+document.addEventListener("keydown",event=>{
+  const nav=document.querySelector(".admin-nav.is-open");
+  if(!nav)return;
+  if(event.key==="Escape"){event.preventDefault();toggleAdminMenu(false);}
+  if(event.key==="Tab") {
+    const controls=nav.querySelectorAll("button,a"), first=controls[0], last=controls[controls.length-1];
+    if(event.shiftKey && document.activeElement===first){event.preventDefault();last.focus();}
+    else if(!event.shiftKey && document.activeElement===last){event.preventDefault();first.focus();}
+  }
+});
+matchMedia("(max-width:900px)").addEventListener("change",event=>{if(!event.matches)toggleAdminMenu(false);});

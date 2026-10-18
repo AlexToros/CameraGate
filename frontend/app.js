@@ -35,7 +35,7 @@ function bindForm(form, submit) {
 function dialog(title, body, kind="sheet") { modal.className=`dialog-${kind}`;modal.setAttribute("aria-label",title); modal.innerHTML = `<header class="dialog-head"><h2>${h(title)}</h2><button class="close icon-button" aria-label="Закрыть">×</button></header><div class="dialog-content">${body}</div>`; if(kind==="picker")modal.querySelector(".dialog-head").append(modal.querySelector(".camera-filters"));modal.querySelector(".close").onclick = () => modal.close(); modal.showModal(); }
 modal.addEventListener("click", event => { if (event.target === modal) { const rect = modal.getBoundingClientRect(); if(event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) modal.close(); } });
 function stopVideo() { clearTimeout(reconnectTimer);socketEpoch++;if(socket)socket.close();socket=null;if(cameraFullscreen){cameraFullscreen.classList.remove("video-expanded");if(document.fullscreenElement===cameraFullscreen)document.exitFullscreen().catch(()=>{});cameraFullscreen=null;}for(const stream of mediaStreams.values())stream.destroy();mediaStreams.clear(); }
-function signedOut(message) { adminDraft=null;finishAdminPicker();root.classList.remove("editing");routeEpoch++; tileObserver?.disconnect(); me = null; csrf = null; state = null; clearInterval(refreshTimer); clearTimeout(saveTimer); stopVideo(); if(modal.open) modal.close(); authView("login", null, message); }
+function signedOut(message) { toggleAdminMenu(false);adminDraft=null;finishAdminPicker();root.classList.remove("editing");routeEpoch++; tileObserver?.disconnect(); me = null; csrf = null; state = null; clearInterval(refreshTimer); clearTimeout(saveTimer); stopVideo(); if(modal.open) modal.close(); authView("login", null, message); }
 function authView(mode, invitation, message = "") {
   const setup = mode === "setup", invite = mode === "invite";
   root.innerHTML = `<main class="auth"><div class="brand-mark" aria-hidden="true">▦</div><h1>${setup ? "Первый администратор" : invite ? "Регистрация" : "Домовые камеры"}</h1><p class="muted">${setup ? "" : invite ? `Здравствуйте, ${h(invitation.last_name)} ${h(invitation.first_name)}!<br>Выберите логин для входа и пароль.` : ""}</p><form class="stack" id="auth-form">${setup ? `<div class="two"><label>Фамилия<input name="last_name" autocomplete="family-name" required maxlength="100"></label><label>Имя<input name="first_name" autocomplete="given-name" required maxlength="100"></label></div>` : ""}<label>Логин<input name="login" autocomplete="username" autocapitalize="none" spellcheck="false" pattern="[A-Za-z0-9._\\-]{3,64}" minlength="3" maxlength="64" required></label><label>Пароль<input name="password" type="password" autocomplete="${mode === "login" ? "current-password" : "new-password"}" ${mode === "login" ? "" : "minlength=6"} maxlength="128" required></label>${mode !== "login" ? `<label>Повторите пароль<input name="password_confirmation" type="password" autocomplete="new-password" minlength="6" maxlength="128" required></label><small>От 6 символов.</small>` : ""}<div class="error" role="alert">${h(message)}</div><button class="primary" type="submit">${setup ? "Создать администратора" : invite ? "Зарегистрироваться" : "Войти"}</button></form><div class="install-help">${mode === "login" ? "Вход по приглашению. " : ""}${showInstallButton() ? `<button id="install" type="button">Установить</button>` : ""}</div></main>`;
@@ -54,6 +54,7 @@ async function install() {
   else { const ios=/iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform==="MacIntel" && navigator.maxTouchPoints>1);toast(ios ? "«Поделиться» → «На экран Домой»" : "Меню браузера → «Установить приложение»"); }
 }
 async function boot() {
+  toggleAdminMenu(false);
   activeLocation=location.hash;
   const epoch = ++routeEpoch;
   tileObserver?.disconnect();
@@ -94,12 +95,13 @@ async function refresh() {
 function render() {
   tileObserver?.disconnect();
   root.classList.remove("editing");
+  document.body.classList.remove("admin-menu-open");
   if(!me || !state) return;
   stopVideo();
   root.innerHTML = `<header class="header"><div class="brand"><span class="symbol" aria-hidden="true">▦</span><div><strong>Домовые камеры</strong><div class="identity">${h(me.first_name)} ${h(me.last_name)}</div></div></div><div class="row"><nav class="tabs" aria-label="Разделы"><button data-page="wall" class="${page === "wall" ? "active" : ""}">Прямой эфир</button>${me.role === "admin" ? `<button data-page="admin" class="${page === "admin" ? "active" : ""}">Управление</button>` : ""}</nav><button id="logout">Выйти</button></div></header><main id="content"></main>`;
   document.querySelectorAll("[data-page]").forEach(button => {
     if(button.dataset.page === page) button.setAttribute("aria-current","page");
-    button.onclick = () => navigateTo(button.dataset.page === "admin" ? "#/admin" : "");
+    button.onclick = () => navigateTo(button.dataset.page === "admin" ? "#/admin/users" : "");
   });
   document.querySelector("#logout").onclick = async () => { if(!mayLeaveAdmin())return; try { await flushSave(); await api("/api/auth/logout","POST",{}); signedOut(); } catch(e) { toast(e.message); } };
   if(page === "wall") wall(); else admin();
@@ -127,6 +129,7 @@ async function locationChanged() {
   render();window.scrollTo(0,0);
 }
 const icons = {
+  menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
   back: '<path d="m14 6-6 6 6 6"/>',
   chevron: '<path d="m9 6 6 6-6 6"/>',
   refresh: '<path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 7a7 7 0 0 1 12-1l2 3M4 15l2 3a7 7 0 0 0 12-1"/>',
@@ -330,7 +333,7 @@ function installPullToRefresh() {
   const reset=()=>{start=null;distance=0;};
   document.addEventListener("touchstart",event=>{
     reset();
-    if(refreshing || event.touches.length!==1 || document.scrollingElement.scrollTop>0 || modal.open || cameraFullscreen || document.fullscreenElement || event.target.closest("button,input,textarea,select,a")) return;
+    if(refreshing || document.body.classList.contains("admin-menu-open") || event.touches.length!==1 || document.scrollingElement.scrollTop>0 || modal.open || cameraFullscreen || document.fullscreenElement || event.target.closest("button,input,textarea,select,a")) return;
     // Leave nested scroll areas to their own gestures, even at their top edge.
     for(let node=event.target;node && node!==document.body;node=node.parentElement) {
       if(node.scrollHeight>node.clientHeight && /auto|scroll/.test(getComputedStyle(node).overflowY)) return;

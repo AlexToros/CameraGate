@@ -150,29 +150,23 @@ dialog::backdrop{background:#233b5270}
 }
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
 
-/* Administration: a section list on phones, a sidebar on larger screens. */
+/* Administration: a drawer on phones, a sidebar on larger screens. */
 .admin{display:grid;grid-template-columns:200px minmax(0,1fr);gap:24px;max-width:1120px;padding:24px;margin:auto;align-items:start}
 .admin-nav{display:grid;position:sticky;top:20px;align-content:start;min-width:0}
 .admin-nav a{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:48px;padding:12px;text-decoration:none;color:var(--ink);border-radius:5px;font-size:14px}
 .admin-nav a[aria-current]{background:#dce8f1;color:var(--blue);font-weight:600}
-.admin-nav a svg{width:16px;height:16px;flex:none}
-.admin:not(.admin-index) .admin-nav a svg{display:none}
+.admin-menu-head,.admin-scrim,.section-head>.admin-menu{display:none}
+body.admin-menu-open{overflow:hidden}
 .surface{min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:7px;overflow:clip}
-.admin-heading{font-size:22px;margin:0 0 18px}
-.admin-index{display:block;max-width:620px}
-.admin-index .surface{display:none}
-.admin-index .admin-nav{position:static;background:var(--panel);border:1px solid var(--line);border-radius:7px;overflow:hidden}
-.admin-index .admin-nav a{border-radius:0;border-bottom:1px solid var(--line);padding:18px;min-height:60px;font-size:16px}
-.admin-index .admin-nav a:last-child{border-bottom:0}
 .section-head,.editor-head{display:flex;align-items:center;gap:12px;padding:16px 20px;border-bottom:1px solid var(--line);background:var(--panel)}
 .section-head h2,.editor-head h2{flex:1;min-width:0;margin:0;font-size:21px;overflow-wrap:anywhere}
 .section-head button,.editor-head button{flex:none;min-height:44px}
-.section-head>.admin-back{display:none}
+.section-head>.admin-back{display:inline-flex}
 .section-head>.primary{font-size:14px}
 .section-head .icon-button,.editor-head .icon-button{width:44px}
 .search-field{display:block;padding:16px 20px 10px}
-.object-list{padding:0 20px}
-.object-row{display:flex;align-items:center;justify-content:flex-start;gap:12px;width:100%;min-height:80px;padding:16px 0;border:0;border-bottom:1px solid var(--line);border-radius:0;background:transparent;text-align:left;white-space:normal}
+.object-list{padding:0}
+.object-row{display:flex;align-items:center;justify-content:flex-start;gap:12px;width:100%;min-height:80px;padding:16px 20px;border:0;border-bottom:1px solid var(--line);border-radius:0;background:transparent;text-align:left;white-space:normal}
 .object-row:last-child{border-bottom:0}
 .object-row:hover{background:transparent}
 .object-row:active{background:#eaf0f5}
@@ -209,17 +203,19 @@ dialog::backdrop{background:#233b5270}
 @media(max-width:900px){
  .header .tabs button,#logout{min-height:44px}
  .admin{display:block;padding:0}
- .admin-heading{margin:0;padding:20px 16px 14px}
- .admin-index{padding:0 12px 20px}
- .admin-index .admin-heading{padding-left:4px}
- .admin.has-section>.admin-nav{display:none}
+ .admin-nav{display:none}
+ .admin-nav.is-open{display:grid;position:fixed;top:0;bottom:0;left:0;z-index:21;width:min(280px,calc(100vw - 44px));padding:max(12px,env(safe-area-inset-top)) 12px max(12px,env(safe-area-inset-bottom));background:var(--panel);overflow-y:auto;overscroll-behavior:contain;box-shadow:8px 0 32px #162d4a30}
+ .admin-nav a{font-size:15px}
+ .admin-menu-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 0 12px 12px;font-weight:600}
+ .admin-menu-close{width:44px;min-height:44px;font-size:24px}
+ .admin-scrim:not([hidden]){display:block;position:fixed;inset:0;z-index:20;border:0;border-radius:0;background:#162d4a66;padding:0}
  .surface{border:0;border-radius:0;min-height:calc(100dvh - 57px)}
  .section-head,.editor-head{gap:8px;padding:10px 12px}
- .section-head>.admin-back{display:inline-flex}
+ .section-head>.admin-menu{display:inline-flex}
  .section-head h2,.editor-head h2{font-size:18px}
  .section-head>.primary{padding:8px 10px;font-size:13px}
  .search-field{padding:12px 16px 4px}
- .object-list{padding:0 16px}
+ .object-row{padding-left:16px;padding-right:16px}
  .form-fields{padding:20px 16px}
  #app.editing>.header{display:none}
  .editing .surface{min-height:100dvh}
