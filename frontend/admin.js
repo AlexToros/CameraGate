@@ -15,6 +15,55 @@ function adminPath() { return location.hash.slice(2).split("/").filter(Boolean).
 function objectRow({id,name,detail,tag="",kind}) {
   return `<button type="button" class="object-row" data-object="${id}" data-kind="${kind}"><span class="object-copy"><span class="object-name">${h(name)}</span>${detail ? `<span class="object-detail">${h(detail)}</span>` : ""}</span>${tag ? `<span class="pill blocked">${h(tag)}</span>` : ""}${icon("chevron")}</button>`;
 }
+function invitationRow(invite) {
+  const name=`${invite.last_name} ${invite.first_name}`;
+  return `<div class="object-row invitation-row"><span class="object-copy"><span class="object-name">${h(name)}</span><span class="object-detail">${roleName(invite.role)}</span></span><button class="danger revoke-invite" data-invite="${invite.id}" aria-label="Отозвать приглашение: ${h(name)}">Отозвать</button></div>`;
+}
+function cameraRow(camera) {
+  return `<div class="object-row camera-row" data-camera="${camera.id}"><button class="camera-name" data-rename="${camera.id}" aria-label="Переименовать: ${h(camera.name)}"><span class="object-copy"><span class="object-name">${h(camera.name)}</span><span class="object-detail">Канал ${camera.id}</span></span></button></div>`;
+}
+function bindInvitationRows(body) {
+  body.querySelectorAll(".revoke-invite").forEach(button=>button.onclick=async()=>{
+    if(!confirm("Отозвать приглашение?"))return;
+    button.disabled=true;
+    try {
+      await api(`/api/admin/invites/${button.dataset.invite}`,"DELETE",{});
+      if(!button.isConnected)return;
+      button.closest(".invitation-row").remove();
+      if(!body.querySelector(".invitation-row"))body.querySelector(".object-list").innerHTML='<p class="empty">Пока пусто</p>';
+    } catch(error){toast(error.message);} finally {button.disabled=false;}
+  });
+}
+function bindCameraRows(body) {
+  const cameras=new Map(state.cameras.map(camera=>[camera.id,camera]));
+  body.querySelectorAll("[data-rename]").forEach(button=>button.onclick=()=>{
+    if(!mayLeaveAdmin())return;
+    body.querySelector(".camera-rename [data-cancel]")?.click();
+    const camera=cameras.get(+button.dataset.rename), row=button.closest(".camera-row");
+    const form=document.createElement("form");form.className="camera-rename";
+    form.innerHTML=`<div class="rename-controls"><input name="name" aria-label="Название камеры" value="${h(camera.name)}" required maxlength="120"><button type="submit" class="icon-button primary" aria-label="Сохранить название">${icon("check")}</button><button type="button" class="icon-button" data-cancel aria-label="Отменить">×</button></div><p class="error" role="alert"></p>`;
+    const draft=adminDraft={route:location.hash,data:{name:camera.name},baseline:JSON.stringify({name:camera.name}),saving:false};
+    const input=form.querySelector("input");
+    const close=()=>{if(draft.saving)return;if(adminDraft===draft)adminDraft=null;form.remove();button.hidden=false;button.focus({preventScroll:true});};
+    button.hidden=true;row.append(form);input.focus();input.select();
+    input.oninput=()=>draft.data.name=input.value;
+    form.querySelector("[data-cancel]").onclick=close;
+    form.addEventListener("keydown",event=>{if(event.key==="Escape"){event.preventDefault();close();}});
+    bindForm(form,async()=>{
+      const name=input.value.trim(), cancel=form.querySelector("[data-cancel]");
+      draft.saving=true;input.disabled=true;cancel.disabled=true;
+      try {
+        await api("/api/admin/cameras","PUT",{cameras:[{id:camera.id,name}]});
+        camera.name=name;
+        if(!form.isConnected)return;
+        button.querySelector(".object-name").textContent=camera.name;
+        button.setAttribute("aria-label",`Переименовать: ${camera.name}`);
+        row.adminSearch=`${camera.name} Канал ${camera.id}`.toLocaleLowerCase();
+        draft.saving=false;close();body.querySelector("#object-search").dispatchEvent(new Event("input"));
+      } finally {draft.saving=false;input.disabled=false;cancel.disabled=false;}
+    });
+  });
+}
 function sectionHead(title, action="", back=false) {
   return `<div class="section-head">${back ? `<button class="admin-back icon-button" aria-label="Назад">${icon("back")}</button>` : `<button class="admin-menu icon-button" aria-label="Разделы управления" aria-expanded="false" aria-controls="admin-navigation">${icon("menu")}</button>`}<h2>${h(title)}</h2>${action}</div>`;
 }
@@ -63,21 +112,24 @@ async function admin() {
       rows=data.users.map(user=>objectRow({id:user.id,name:`${user.last_name} ${user.first_name}`,detail:`${user.login} · ${roleName(user.role)}`,tag:user.blocked ? "Заблокирован" : "",kind:"user"}));
     } else if(section==="invites") {
       const data=await api("/api/admin/invites");if(!body.isConnected)return;
-      rows=data.invitations.map(invite=>objectRow({id:invite.id,name:`${invite.last_name} ${invite.first_name}`,detail:roleName(invite.role),kind:"invite"}));
+      rows=data.invitations.map(invitationRow);
     } else if(section==="groups") {
       rows=state.groups.map(group=>objectRow({id:group.id,name:group.name,detail:cameraCount(group.camera_ids.length),kind:"group"}));
     } else if(section==="cameras") {
-      rows=state.cameras.map(camera=>objectRow({id:camera.id,name:camera.name,detail:`Канал ${camera.id}`,kind:"camera"}));
+      rows=state.cameras.map(cameraRow);
     } else if(section==="connection") {
       await adminEditor(body,section,"settings");return;
     }
     body.innerHTML=`${sectionHead(adminSections[section],create)}${section==="cameras" || section==="users" ? `<label class="search-field"><span class="sr-only">${section==="cameras" ? "Найти камеру" : "Найти пользователя"}</span><input type="search" id="object-search" placeholder="Поиск" autocomplete="off"></label>` : ""}<div class="object-list">${rows.join("") || '<p class="empty">Пока пусто</p>'}</div><p class="empty search-empty" hidden>Ничего не найдено</p>`;
     bindAdminHeader(body);
     bindAdminRows(body,section);
+    if(section==="invites")bindInvitationRows(body);
+    if(section==="cameras")bindCameraRows(body);
     const search=body.querySelector("#object-search");
     if(search) {
-      const entries=[...body.querySelectorAll(".object-row")].map(element=>({element,text:element.textContent.toLocaleLowerCase()}));
-      search.oninput=()=>{const query=search.value.trim().toLocaleLowerCase();let found=0;for(const entry of entries){entry.element.hidden=!entry.text.includes(query);if(!entry.element.hidden)found++;}body.querySelector(".search-empty").hidden=found>0;};
+      const entries=[...body.querySelectorAll(".object-row")];
+      entries.forEach(element=>element.adminSearch=element.textContent.toLocaleLowerCase());
+      search.oninput=()=>{const query=search.value.trim().toLocaleLowerCase();let found=0;for(const entry of entries){entry.hidden=!entry.adminSearch.includes(query);if(!entry.hidden)found++;}body.querySelector(".search-empty").hidden=found>0;};
     }
     const invite=body.querySelector("#new-invite");if(invite)invite.onclick=()=>navigateTo("#/admin/invites/new");
     const group=body.querySelector("#new-group");if(group)group.onclick=()=>navigateTo("#/admin/groups/new");
@@ -137,7 +189,7 @@ async function adminEditor(body,section,item) {
     save=async data=>api("/api/admin/cameras","PUT",{cameras:[{id:camera.id,name:data.name}]});
   } else if(section==="connection") {
     const connection=await api("/api/admin/connection");if(!body.isConnected)return;
-    value={ID:"",UserName:"",Password:""};title="Подключение";back="#/admin";
+    value={ID:"",UserName:"",Password:""};title="Подключение";submit="Подключить";back="#/admin";
     connectionStatus=connection.status;
     extra=`<div class="connection-status" role="status">${connectionSummary(connection)}</div><p class="field-hint">${connection.configured ? "Чтобы подключить другой регистратор, введите его Cloud ID, логин и пароль." : "Введите Cloud ID, логин и пароль регистратора."}</p>`;
     save=async data=>api("/api/admin/connection","PUT",data);
@@ -169,7 +221,7 @@ async function adminEditor(body,section,item) {
     try {
       const result=await save(data);
       draft.baseline=JSON.stringify(data);draft.saving=false;
-      if(section==="invites") { showCreatedInvite(body,result.token,back);return; }
+      if(section==="invites") { await showCreatedInvite(result.token,back);return; }
       const next=await api("/api/state");if(!me)return;
       state={...state,...next,layout:state.layout};
       adminDraft=null;await navigateTo(back);
@@ -202,12 +254,14 @@ function finishAdminPicker() {
   if(!adminPicker)return;
   const {form,picker,scroll}=adminPicker;adminPicker=null;picker.remove();form.hidden=false;window.scrollTo(0,scroll);
 }
-function showCreatedInvite(body,token,back) {
+async function showCreatedInvite(token,back) {
   adminDraft=null;
+  await navigateTo(back);
   const link=`${location.origin}/#/invite/${token}`;
-  body.innerHTML=`${sectionHead("Приглашение","",true)}<div class="form-fields stack"><p>Ссылка действует 7 дней. Скопируйте её до закрытия.</p><a class="invite-link" href="${h(link)}" target="_blank" rel="noopener noreferrer">${h(link)}</a><button class="primary" id="copy-link">Копировать ссылку</button></div>`;
-  bindAdminHeader(body,back);
-  body.querySelector("#copy-link").onclick=async()=>{try{await navigator.clipboard.writeText(link);toast("Ссылка скопирована");}catch{toast("Выделите и скопируйте ссылку");}};
+  dialog("Приглашение",`<p class="muted">Ссылка действует 7 дней.</p><div class="invite-copy-row"><button type="button" class="invite-link" aria-label="Копировать ссылку приглашения">${h(link)}</button><button type="button" class="icon-button" id="copy-link" aria-label="Копировать ссылку">${icon("copy")}</button></div>`);
+  const copy=async()=>{try{await navigator.clipboard.writeText(link);toast("Ссылка скопирована");}catch{toast("Не удалось скопировать. Выделите ссылку вручную.");}};
+  modal.querySelector(".invite-link").onclick=copy;
+  modal.querySelector("#copy-link").onclick=copy;
 }
 
 document.addEventListener("keydown",event=>{

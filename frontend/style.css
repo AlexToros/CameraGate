@@ -101,7 +101,9 @@ html.installed-app{overscroll-behavior-y:contain}
 .form-limit{max-width:580px}
 .actions{display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;margin-top:8px}
 dialog::backdrop{background:#233b5270}
-.invite-link{display:block;word-break:break-all;font-size:13px;background:#e3ecf3;padding:15px;border-radius:4px;user-select:all}
+.invite-copy-row{display:flex;align-items:center;gap:8px}
+.invite-link{display:block;flex:1;min-width:0;white-space:normal;word-break:break-all;text-align:left;font-size:13px;background:#e3ecf3;padding:12px;border-radius:4px;user-select:all}
+.invite-copy-row>.icon-button{flex:none;width:44px;min-height:44px}
 #notice{position:fixed;bottom:max(18px,env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;padding:12px 18px;border-radius:7px;z-index:10;box-shadow:0 8px 30px #25354433;max-width:90vw;display:none;font-size:14px}
 #notice.visible{display:block}
 .install-help{font-size:13px;color:var(--muted);margin-top:22px}
@@ -260,3 +262,13 @@ body:has(dialog[open]){overflow:hidden}
  .editor-head h2{font-size:17px}
  .editor-head>.primary{font-size:14px;padding:8px 10px}
 }
+
+.invitation-row{cursor:default}
+.invitation-row .revoke-invite{flex:none;font-size:13px;min-height:44px}
+.camera-name{display:block;flex:1;min-width:0;min-height:48px;text-align:left;white-space:normal;padding:0;border:0;background:transparent}
+.camera-name:hover{background:transparent}
+.camera-rename{width:100%;margin:0}
+.rename-controls{display:flex;align-items:center;gap:8px}
+.rename-controls input{flex:1;min-width:0}
+.rename-controls .icon-button{flex:none;width:44px;min-height:44px}
+.camera-rename .error:empty{display:none}
