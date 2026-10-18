@@ -2,7 +2,7 @@
 *{box-sizing:border-box}
 [hidden]{display:none!important}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
-body{margin:0}
+body{margin:0;padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right)}
 button,input,select{font:inherit}
 input,select{font-weight:400}
 button,a,input,select{-webkit-tap-highlight-color:transparent}
@@ -195,14 +195,18 @@ dialog::backdrop{background:#233b5270}
 .selection-summary svg{width:16px;height:16px;color:var(--muted)}
 .user-access h3{font-size:14px;margin:8px 0 12px}
 .admin-access{margin:0;font-size:14px}
-.picker-tools{position:sticky;top:69px;z-index:3;padding:16px 24px;background:var(--panel);border-bottom:1px solid var(--line)}
-.picker-count{font-size:13px;color:var(--muted);margin-top:12px}
+.picker-top{position:sticky;top:0;z-index:4;background:var(--panel)}
+.picker-top .editor-head{position:static}
+.picker-tools{padding:16px 24px 8px;background:var(--panel);border-bottom:1px solid var(--line)}
+.picker-summary{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:4px}
+.picker-toggle{font-size:13px;border:0;background:transparent;min-height:44px;padding:8px 0}
+.picker-count{font-size:13px;color:var(--muted)}
 .picker-items{padding:0 24px}
 .picker-option{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:56px;padding:14px 0;border-bottom:1px solid var(--line);font-size:14px;font-weight:400;line-height:1.4}
 .picker-option span{overflow-wrap:anywhere}
 .admin .empty{font-size:14px;margin:0}
 .admin .delete-group{justify-self:start;font-size:14px}
-@media(max-width:760px){
+@media(max-width:900px){
  .header .tabs button,#logout{min-height:44px}
  .admin{display:block;padding:0}
  .admin-heading{margin:0;padding:20px 16px 14px}
@@ -221,7 +225,7 @@ dialog::backdrop{background:#233b5270}
  .editing .surface{min-height:100dvh}
  .editor-head{padding-top:max(10px,env(safe-area-inset-top))}
  .form-fields,.picker-items{padding-bottom:max(24px,env(safe-area-inset-bottom))}
- .picker-tools{top:65px;padding:12px 16px}
+ .picker-tools{padding:12px 16px 4px}
  .picker-items{padding-left:16px;padding-right:16px}
  .admin .object-name{font-size:15px}
 }
@@ -237,10 +241,13 @@ body:has(dialog[open]){overflow:hidden}
 .dialog-content details{border-top:1px solid var(--line);padding-top:16px}
 .dialog-content summary{cursor:pointer;font-size:14px;padding:8px 0}
 .dialog-content details form{margin-top:16px}
-.empty-camera{position:absolute;inset:0;width:100%;height:100%;border:0;border-radius:0;background:transparent;color:#c8d7e2;font-size:13px}
+.empty-camera{position:absolute;inset:0;width:100%;height:100%;border:0;border-radius:0;background:transparent;color:#c8d7e2;font-size:13px;z-index:3}
 .empty-camera:hover{background:#314353}
 .order-control{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .order-control button{width:44px;min-height:44px}
+.field-label{font-size:14px;font-weight:600}
+.dialog-picker .dialog-head{display:grid;grid-template-columns:minmax(0,1fr) 44px;gap:12px}
+.dialog-picker .camera-filters{grid-column:1/-1;margin:0}
 .tile-options-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:8px}
 @media(max-width:760px){
  dialog{width:calc(100% - 16px);max-height:calc(100dvh - 16px)}
@@ -248,7 +255,6 @@ body:has(dialog[open]){overflow:hidden}
  .dialog-content{padding:16px}
  .dialog-picker{position:fixed;inset:0;width:100%;max-width:none;height:100dvh;max-height:100dvh;margin:0;border:0;border-radius:0}
  .dialog-picker .dialog-head{padding-top:max(10px,env(safe-area-inset-top))}
- .dialog-picker .camera-filters{position:sticky;top:65px;z-index:3;background:var(--panel);padding-bottom:12px;margin-bottom:0}
  .dialog-picker .camera-choices{max-height:none;overflow:visible}
  .dialog-picker .dialog-content{padding-top:12px;padding-bottom:max(20px,env(safe-area-inset-bottom))}
 }
