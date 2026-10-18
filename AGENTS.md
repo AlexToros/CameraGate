@@ -1,8 +1,8 @@
-# Video Viewer
+# CameraGate
 
 ## Scope and workflow
 
-- Deployment to the user's VPS with both bogdanova34.site and bogdanova34.ru is authorized. Both hosts must serve the same portal without redirecting one to the other. GitHub: public AlexToros/video-viewer; main requires owner review for collaborators, with owner bypass. Never give collaborators administrator access merely to push changes.
+- Deployment to the user's VPS with both bogdanova34.site and bogdanova34.ru is authorized. Both hosts must serve the same portal without redirecting one to the other. GitHub: public AlexToros/CameraGate; main requires owner review for collaborators, with owner bypass. Never give collaborators administrator access merely to push changes.
 - Keep changes in small coherent commits. Never commit `.env`, `.runtime/`, databases, SDK binaries, secrets, diagnostics or camera images.
 - Shared global user instructions and `/Users/aspyankov/.codex/RTK.md` apply. Prefix shell commands with `rtk`.
 - This file holds repository architecture and implementation context as requested by the user. Temporary reports and detailed task journals belong outside git.
