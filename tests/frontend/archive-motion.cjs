@@ -18,6 +18,7 @@ execFileSync(process.env.FFMPEG_BINARY || 'ffmpeg',['-hide_banner','-loglevel','
  });
  await page.route('**/api/admin/archive/search',async route=>{
    searches++;const input=route.request().postDataJSON();assert.equal(input.camera_id,1);
+   if(input.cursor?.endsWith('18:00:00')){await route.fulfill({json:{records:Array.from({length:48},(_,i)=>({id:'evening-'+i,start:`2026-10-20 18:${String(i).padStart(2,'0')}:00`,end:`2026-10-20 18:${String(i).padStart(2,'0')}:30`,duration:30})),cursor:null}});return;}
    if(searches===1)await new Promise(resolve=>releaseSearch=resolve);
    const record={id:'test-record',start:'2026-10-20 10:00:00',end:'2026-10-20 10:01:00',duration:60};
    await route.fulfill({json:{records:input.cursor ? [record,{...record,id:'second',start:'2026-10-20 11:00:00',end:'2026-10-20 11:01:00'}] : [record],cursor:input.cursor ? null : '2026-10-20 10:00:00'}});
@@ -54,6 +55,20 @@ execFileSync(process.env.FFMPEG_BINARY || 'ffmpeg',['-hide_banner','-loglevel','
    await page.setViewportSize({width,height:900});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth),width);
  }
  if(process.env.UI_SCREENSHOTS_DIR){fs.mkdirSync(process.env.UI_SCREENSHOTS_DIR,{recursive:true});await page.setViewportSize({width:390,height:844});await page.screenshot({path:path.join(process.env.UI_SCREENSHOTS_DIR,'archive-mobile.png')});}
+ await page.locator('[data-time="18:00"]').click();await page.locator('.archive-record').nth(47).waitFor();
+ assert.equal(await page.locator('[name=time]').inputValue(),'18:00');
+ assert.equal(await page.locator('.archive-record').count(),48);
+ const evening=page.locator('.archive-record').nth(40);await evening.scrollIntoViewIfNeeded();
+ const before=await evening.boundingBox();await evening.click();
+ assert.equal(await evening.getAttribute('aria-expanded'),'true');
+ assert.equal(await page.locator('.archive-entry').nth(40).locator('.archive-view').count(),1);
+ assert.ok(Math.abs((await evening.boundingBox()).y-before.y)<4,'opening playback must preserve row position');
+ assert.ok((await evening.boundingBox()).height<=36,'recording rows must stay compact');
+ const later=page.locator('.archive-record').nth(47);await later.scrollIntoViewIfNeeded();const laterTop=(await later.boundingBox()).y;
+ await later.click();assert.ok(Math.abs((await later.boundingBox()).y-laterTop)<4,'switching must not jump to the old player');
+ assert.equal(await page.locator('.archive-entry .archive-view').count(),1);
+ await later.click();assert.equal(await page.locator('.archive-entry .archive-view').count(),0);
+ assert.equal(await page.evaluate(()=>archiveViewer),null);
  await page.getByRole('button',{name:'Прямой эфир',exact:true}).click();await page.locator('#wall').waitFor();assert.equal(await page.evaluate(()=>archiveViewer),null);
  assert.deepEqual(errors,[]);console.log('PASS motion start/unavailable; admin archive search/paging/dedup; synthetic MSE playback, automatic reconnect, pause cancellation, seek, cleanup and widths320/390/768/1440');
 }finally{await browser.close();fs.rmSync(temp,{recursive:true,force:true});}})().catch(error=>{console.error(error);fs.rmSync(temp,{recursive:true,force:true});process.exitCode=1;});

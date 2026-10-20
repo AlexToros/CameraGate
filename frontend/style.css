@@ -314,3 +314,24 @@ body:has(dialog[open]){overflow:hidden}
 @media(pointer:coarse){.tile-drag{width:22px;min-width:22px;height:24px;min-height:24px}}
 .export-link{display:flex;justify-content:center;align-items:center;min-height:43px;padding:10px 12px;border-radius:6px;text-decoration:none}
 .archive-export-form input{min-width:0;max-width:100%}
+
+/* Compact recorder archive; playback expands within its recording row. */
+.archive-record.object-row{min-height:36px;padding:6px 20px;font-size:13px;font-variant-numeric:tabular-nums}
+.archive-entry{border-bottom:1px solid var(--line,#e1e6e4)}
+.archive-entry .archive-record{border-bottom:0;width:100%}
+.archive-entry .archive-view{margin:0;border-radius:0}
+.archive-periods{display:flex;gap:6px;margin-top:12px;flex-wrap:wrap}
+.archive-periods button{flex:1;padding:7px 10px;font-size:13px}
+.archive-record[aria-expanded=true] svg{transform:rotate(90deg)}
+@media(max-width:600px){
+ .archive-record.object-row{min-height:34px;padding:5px 12px;font-size:12px}
+ .archive-search{gap:8px}
+ .archive-search label{min-width:0;flex-basis:calc(50% - 8px)}
+ .archive-search label:first-child{flex-basis:100%}
+ .archive-search button{width:auto;flex:1}
+ .archive-controls{padding:6px}
+ .archive-controls button{padding:6px 8px;font-size:12px}
+}
+
+.archive-records{overflow-anchor:none}
+.archive-periods [aria-pressed=true]{background:#e3f0e9;border-color:#8ab99e;color:#185c37}

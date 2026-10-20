@@ -121,14 +121,15 @@ class ArchivePlayer {
 function renderArchive(body) {
   stopArchive();
   const today=new Date(), date=`${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
-  body.innerHTML=`${sectionHead('Архив')}<div class="archive-body"><form class="archive-search"><label>Камера<select name="camera_id" required>${state.cameras.map(camera=>`<option value="${camera.id}">${h(camera.name)}</option>`).join('')}</select></label><label>Дата<input name="date" type="date" required value="${date}"></label><button class="primary" type="submit">Найти</button></form><p class="field-hint">Время регистратора</p><p class="archive-error error" role="alert"></p><section class="archive-view" hidden><video muted autoplay playsinline></video><div class="archive-controls"><button type="button" data-play>Пауза</button><button type="button" data-download>Скачать</button><output data-clock></output><input type="range" data-position aria-label="Позиция в записи" min="0" step="1"><button type="button" class="icon-button" data-fullscreen aria-label="На весь экран">${icon('expand')}</button></div><p class="archive-status" role="status"></p></section><div class="archive-records object-list"></div><button type="button" class="archive-more" hidden>Ещё</button></div>`;
+  body.innerHTML=`${sectionHead('Архив')}<div class="archive-body"><form class="archive-search"><label>Камера<select name="camera_id" required>${state.cameras.map(camera=>`<option value="${camera.id}">${h(camera.name)}</option>`).join('')}</select></label><label>Дата<input name="date" type="date" required value="${date}"></label><label>С времени<input name="time" type="time" value="00:00" required></label><button class="primary" type="submit">Найти</button></form><nav class="archive-periods" aria-label="Время суток"><button type="button" data-time="00:00">Ночь</button><button type="button" data-time="06:00">Утро</button><button type="button" data-time="12:00">День</button><button type="button" data-time="18:00">Вечер</button></nav><p class="field-hint">Время регистратора</p><p class="archive-error error" role="alert"></p><section class="archive-view" hidden><video muted autoplay playsinline></video><div class="archive-controls"><button type="button" data-play>Пауза</button><button type="button" data-download>Скачать</button><output data-clock></output><input type="range" data-position aria-label="Позиция в записи" min="0" step="1"><button type="button" class="icon-button" data-fullscreen aria-label="На весь экран">${icon('expand')}</button></div><p class="archive-status" role="status"></p></section><div class="archive-records object-list"></div><button type="button" class="archive-more" hidden>Ещё</button></div>`;
   bindAdminHeader(body);
   const form=body.querySelector('form'), list=body.querySelector('.archive-records'),more=body.querySelector('.archive-more'),error=body.querySelector('.archive-error'),view=body.querySelector('.archive-view');
   let cursor=null,epoch=0,query=null;
   const records=new Map();
   const search=async append=>{
     const current=++epoch;
-    if(!append){stopArchive();view.hidden=true;records.clear();list.innerHTML='';cursor=null;query=Object.fromEntries(new FormData(form));}
+    if(!append){stopArchive();view.hidden=true;records.clear();list.innerHTML='';query=Object.fromEntries(new FormData(form));cursor=query.time==='00:00' ? null : `${query.date} ${query.time}:00`;more.hidden=true;view.remove();}
+    body.querySelectorAll('[data-time]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.time===query.time)));
     const submit=form.querySelector('[type=submit]');submit.disabled=more.disabled=true;error.textContent='';
     form.setAttribute('aria-busy','true');list.setAttribute('aria-busy','true');
     form.querySelectorAll('input,select').forEach(input=>input.disabled=true);
@@ -142,20 +143,30 @@ function renderArchive(body) {
         const key=record.start+'|'+record.end;
         if(records.has(key))continue;
         records.set(key,record);
+        const entry=document.createElement('div');entry.className='archive-entry';
         const button=document.createElement('button');button.type='button';button.className='object-row archive-record';
         button.innerHTML=`<span>${h(record.start.slice(11))} — ${h(record.end.slice(11))}</span>${icon('chevron')}`;
+        button.setAttribute('aria-expanded','false');
         button.onclick=()=>{
-          stopArchive();list.querySelector('[aria-current]')?.removeAttribute('aria-current');button.setAttribute('aria-current','true');view.hidden=false;
+          const wasOpen=button.getAttribute('aria-expanded')==='true', top=button.getBoundingClientRect().top;
+          stopArchive();
+          const previous=list.querySelector('[aria-current]');previous?.removeAttribute('aria-current');previous?.setAttribute('aria-expanded','false');
+          view.hidden=true;view.remove();
+          // Preserve the clicked row's viewport position when removing an earlier player.
+          if(wasOpen){window.scrollBy(0,button.getBoundingClientRect().top-top);return;}
+          button.setAttribute('aria-current','true');button.setAttribute('aria-expanded','true');entry.append(view);view.hidden=false;
           archiveViewer=new ArchivePlayer(view,record,message=>{if(body.isConnected)view.querySelector('.archive-status').textContent=message;});
-          archiveViewer.start();view.scrollIntoView({behavior:'smooth',block:'nearest'});
+          archiveViewer.start();
+          window.scrollBy(0,button.getBoundingClientRect().top-top);
         };
-        list.append(button);
+        entry.append(button);list.append(entry);
       }
       cursor=result.cursor;more.hidden=!cursor;
       if(!records.size)list.innerHTML='<p class="empty">За эту дату записей нет</p>';
     } catch(e){if(body.isConnected && epoch===current){if(!append)list.innerHTML='';error.textContent=e.message;}}
     finally{if(epoch===current){submit.disabled=more.disabled=false;submit.textContent='Найти';more.textContent='Ещё';form.querySelectorAll('input,select').forEach(input=>input.disabled=false);form.removeAttribute('aria-busy');list.removeAttribute('aria-busy');}}
   };
+  body.querySelectorAll('[data-time]').forEach(button=>button.onclick=()=>{if(form.getAttribute('aria-busy'))return;form.elements.time.value=button.dataset.time;search(false);});
   form.onsubmit=event=>{event.preventDefault();search(false);};more.onclick=()=>search(true);
 }
 
