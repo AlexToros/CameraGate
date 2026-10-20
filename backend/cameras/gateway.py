@@ -53,13 +53,14 @@ def gateway_app(token, pool=None):
         await ws.prepare(request)
         sockets.add(ws)
         selected, sent = set(),{}
+        priority_selected=set()
         motion_sent,motion_at=None,0
         audio_selected, audio_sent = set(),{}
         initial = await ws.receive_json(timeout=10)
         await configure(initial['config'])
         config = streams.config
         async def receive():
-            nonlocal selected, audio_selected, audio_sent
+            nonlocal selected, audio_selected, audio_sent, priority_selected
             async for message in ws:
                 if message.type != WSMsgType.TEXT:
                     break
@@ -68,6 +69,10 @@ def gateway_app(token, pool=None):
                     if not isinstance(values,list) or len(values)>256 or any(type(c) is not int or not 1<=c<=256 for c in values):
                         raise ValueError()
                     selected = set(values)
+                    priority=json.loads(message.data).get('priority_camera_ids',values)
+                    if not isinstance(priority,list) or len(priority)>256 or any(type(cid) is not int or cid not in selected for cid in priority):
+                        raise ValueError()
+                    priority_selected=set(priority)
                     audio = json.loads(message.data).get('audio_camera_ids',[])
                     if not isinstance(audio,list) or len(audio)>256 or any(type(cid) is not int or cid not in selected for cid in audio):
                         raise ValueError()
@@ -82,7 +87,7 @@ def gateway_app(token, pool=None):
         reader = asyncio.create_task(receive())
         try:
             while not ws.closed and streams.config == config:
-                sources = streams.subscribe(selected)
+                sources = streams.subscribe(selected,priority_ids=priority_selected)
                 states,payload = pack_encoded(sources,sent)
                 payload += pack_audio({cid:sources[cid] for cid in audio_selected if cid in sources},audio_sent)
                 await asyncio.wait_for(ws.send_json(dict(cameras=states)),5)

@@ -15,6 +15,7 @@ import time
 import uuid
 
 from .audio import AudioClock
+from .connections import ConnectionGate, ControlSlot
 from .motion import MotionMonitor
 from .mp4 import Muxer, parameter_sets, ReorderedStream
 from .vesta import Transport, Frames, discover
@@ -67,7 +68,7 @@ class Channel:
                 self.outbox.put(dict(base, type='status', state='Подключение к камере…'))
                 # Each native session is intrinsically per camera; SDK exposes
                 # no multi-channel monitor call. All share one initialized hub.
-                with self.connecting:
+                with self.connecting.slot(self.cid):
                     if self.stop.is_set():
                         return
                     transport = Transport(None, self.config['SERIAL_NUM'], hub=self.hub)
@@ -112,7 +113,7 @@ class Channel:
                             self.outbox.put(dict(base, type='init', mime=muxer.mime, fps=fps), muxer.init)
                             stage = 'media'
                         fragment = muxer.fragment(video, key)
-                        self.outbox.put(dict(base, type='media', key=key), fragment)
+                        self.outbox.put(dict(base, type='media', key=key,worker_at=time.time(),sdk_gap=transport.max_callback_gap), fragment)
                         media_at = time.monotonic()
                         delay = 1
                     if muxer and audio:
@@ -148,7 +149,8 @@ def main():
     desired = {cid:initial.get('tokens',{}).get(str(cid),'probe') for cid in initial.get('camera_ids', [])}
     condition = threading.Condition()
     channels = {}
-    connecting, initializing = threading.Semaphore(2), threading.Semaphore(1)
+    connecting, initializing = ConnectionGate(2), threading.Semaphore(1)
+    connecting.prioritize(initial.get('priority_ids', []))
 
     def stop(*_):
         stopping.set()
@@ -177,11 +179,17 @@ def main():
                 stop()
                 return
             try:
-                ids = json.loads(line)['camera_ids']
+                update=json.loads(line)
+                ids = update['camera_ids']
                 if not isinstance(ids,list) or len(ids)>256 or any(type(cid) is not int or not 1<=cid<=256 for cid in ids):
                     raise ValueError()
                 with condition:
-                    tokens = json.loads(line).get('tokens',{})
+                    priority=update.get('priority_ids',[])
+                    selected_ids=set(ids)
+                    if not isinstance(priority,list) or len(priority)>256 or any(type(cid) is not int or cid not in selected_ids for cid in priority):
+                        raise ValueError()
+                    connecting.prioritize(priority)
+                    tokens = update.get('tokens',{})
                     desired = {cid:tokens.get(str(cid),'probe') for cid in ids}
                     condition.notify_all()
             except (ValueError, KeyError, TypeError):
@@ -190,7 +198,7 @@ def main():
     hub = None
     try:
         hub = Transport(discover(), None)
-        monitor = MotionMonitor(hub, config, outbox, stopping, connecting)
+        monitor = MotionMonitor(hub, config, outbox, stopping, ControlSlot(connecting))
         threading.Thread(target=monitor.run, daemon=True).start()
         offline_since = None
         while not stopping.is_set():
@@ -216,6 +224,7 @@ def main():
     finally:
         # Parent SIGKILL fallback bounds shutdown, including any stuck vendor call.
         stopping.set()
+        connecting.close()
         for channel in channels.values():
             channel.stop.set()
         if hub:

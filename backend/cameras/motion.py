@@ -1,6 +1,7 @@
 """Recorder motion notifications, with one bulk state reconciliation."""
 import json
 import queue
+import re
 import threading
 import time
 
@@ -9,26 +10,43 @@ from .vesta import Transport
 
 class MotionState:
     def __init__(self):
-        self.active = set()
+        self.video = set()
+        self.human = {}
+
+    @property
+    def active(self):
+        # A missed Stop must not leave the person icon active indefinitely;
+        # new events refresh its bounded lifetime.
+        now = time.monotonic()
+        self.human = {cid:until for cid,until in self.human.items() if until>now}
+        return self.video | self.human.keys()
 
     def alarm(self, message):
         alarm = message.get('AlarmInfo', message)
-        if not isinstance(alarm, dict) or alarm.get('Event') != 'VideoMotion':
-            return
+        if not isinstance(alarm, dict) or alarm.get('Event') not in ('VideoMotion','appEventHumanDetectAlarm'):
+            return False
         channel, status = alarm.get('Channel'), alarm.get('Status')
+        if isinstance(channel,str) and channel.isascii() and channel.isdigit() and len(channel)<=3:
+            channel=int(channel)
         if type(channel) is not int or not 0 <= channel < 256:
-            return
-        if status == 'Start':
-            self.active.add(channel+1)
+            return False
+        if status not in ('Start','Stop'):
+            return False
+        if alarm['Event']=='appEventHumanDetectAlarm':
+            if status=='Start':self.human[channel+1]=time.monotonic()+10
+            else:self.human.pop(channel+1,None)
+        elif status == 'Start':
+            self.video.add(channel+1)
         elif status == 'Stop':
-            self.active.discard(channel+1)
+            self.video.discard(channel+1)
+        return True
 
     def reconcile(self, message):
         value = message['WorkState']['AlarmState']['VideoMotion']
         mask = int(value, 16) if isinstance(value, str) else value
         if type(mask) is not int or not 0 <= mask < 1 << 256:
             raise ValueError('Invalid motion mask')
-        self.active = {index+1 for index in range(mask.bit_length()) if mask & (1 << index)}
+        self.video = {index+1 for index in range(mask.bit_length()) if mask & (1 << index)}
 
 
 class MotionMonitor:
@@ -36,10 +54,11 @@ class MotionMonitor:
     def __init__(self, hub, config, outbox, stopping, connecting):
         self.hub, self.config, self.outbox = hub, config, outbox
         self.stopping, self.connecting = stopping, connecting
+        self.diagnostics=dict(notifications=0,motion_events=0,other_notifications=0,last_notice_id=None,state_checks=0,failures=0,last_event=None,last_event_type=None,last_event_channel=None,last_event_status=None)
 
     def publish(self, state=None, method=None, error=None):
         self.outbox.put(dict(type='motion', available=state is not None,
-            camera_ids=sorted(state.active) if state else [],method=method,error=error), timeout=0)
+            camera_ids=sorted(state.active) if state else [],method=method,error=error,diagnostics=self.diagnostics.copy()), timeout=0)
 
     def run(self):
         delay = 2
@@ -71,17 +90,32 @@ class MotionMonitor:
                     try:
                         fields, body = transport.receive(.25)
                     except queue.Empty:
+                        self.diagnostics['foreign_alarm_messages']=getattr(transport,'foreign_alarm_messages',0)
                         continue
                     mid = fields[-2]
                     if mid not in (1501, 1504, 1021):
+                        if 1500<=mid<=1510:
+                            self.diagnostics['other_notifications']+=1
+                            self.diagnostics['last_notice_id']=mid
                         continue
                     message = json.loads(body.rstrip(b'\n\0'))
                     if mid == 1501:
                         subscribed = message.get('Ret') == 100
                     elif mid == 1504:
-                        state.alarm(message)
+                        self.diagnostics['notifications']+=1
+                        self.diagnostics['last_event']=time.time()
+                        alarm=message.get('AlarmInfo',message)
+                        if isinstance(alarm,dict):
+                            kind=alarm.get('Event')
+                            self.diagnostics['last_event_type']=kind if isinstance(kind,str) and re.fullmatch('[A-Za-z_]{1,48}',kind) else 'other'
+                            channel=alarm.get('Channel')
+                            if isinstance(channel,str) and channel.isascii() and channel.isdigit() and len(channel)<=3:channel=int(channel)
+                            self.diagnostics['last_event_channel']=channel+1 if type(channel) is int and 0<=channel<256 else None
+                            self.diagnostics['last_event_status']=alarm.get('Status') if alarm.get('Status') in ('Start','Stop') else 'other'
+                        if state.alarm(message):self.diagnostics['motion_events']+=1
                     elif message.get('Ret') == 100:
                         state.reconcile(message)
+                        self.diagnostics['state_checks']+=1
                         known, pending = True, False
                     else:
                         raise ConnectionError('Motion state unavailable')
@@ -89,6 +123,7 @@ class MotionMonitor:
                         self.publish(state,method='events' if subscribed else 'poll')
                         delay = 2
             except Exception as error:
+                self.diagnostics['failures']+=1
                 self.publish(error=type(error).__name__)
             finally:
                 if transport:

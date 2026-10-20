@@ -50,7 +50,8 @@ class FakeStreams:
         self.persistent = set()
     def maintain(self, values):
         self.persistent = set(values)
-    def subscribe(self, values):
+    def subscribe(self, values, *, priority_ids=None):
+        self.priority_ids=set(values if priority_ids is None else priority_ids)
         for cid in values:
             if cid not in self.sources:
                 source = self.sources[cid] = EncodedSource(cid)
@@ -227,6 +228,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.put('/api/admin/connection',json={},headers={'Origin':'https://evil.example'})).status,403)
         self.assertEqual((await self.client.put('/api/admin/connection',json={})).status,403)
         _,headers,_ = await self.viewer()
+        self.assertEqual((await self.client.get('/api/admin/media/diagnostics',headers=headers)).status,403)
         self.assertEqual((await self.client.get('/api/admin/users',headers=headers)).status,403)
         state = await (await self.client.get('/api/state',headers=headers)).json()
         self.assertEqual([c['id'] for c in state['cameras']],[1])

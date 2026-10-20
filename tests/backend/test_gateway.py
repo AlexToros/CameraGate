@@ -52,6 +52,14 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(remote.motion({1})['camera_ids'],[1])
                     self.assertEqual(remote.motion({2})['camera_ids'],[])
                     self.assertEqual(remote.subscribe([1])[1],sources[1])
+                    # The portal retains both sources, but only visible cameras
+                    # receive native reconnect priority across the gateway.
+                    sources[2].demanded=0
+                    remote.subscribe([1])
+                    deadline=time.monotonic()+3
+                    while getattr(upstream,'priority_ids',set())!={1} and time.monotonic()<deadline:await asyncio.sleep(.02)
+                    self.assertEqual(upstream.priority_ids,{1})
+                    self.assertEqual(set(upstream.sources),{1,2})
                     await remote.replace(dict(config,PASSWORD='new-test-password'))
                     self.assertFalse(remote.sources)
                     self.assertIsNone(remote.device_info)

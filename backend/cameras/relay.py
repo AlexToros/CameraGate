@@ -12,6 +12,7 @@ from .streams import worker_command, terminate
 from ..paths import ROOT
 
 LOG = logging.getLogger('media')
+MOTION_LOG = logging.getLogger('motion')
 RECORD = struct.Struct('!IBI')
 MAX_GOP = 2*1024*1024
 MAX_BATCH = 4*1024*1024
@@ -21,7 +22,7 @@ MAX_CACHE = 64*1024*1024
 class EncodedSource:
     def __init__(self, cid):
         self.cid, self.token = cid, uuid.uuid4().hex
-        self.touched = 0
+        self.touched = self.demanded = 0
         self.state = 'Подключение к камере…'
         self.generation, self.init, self.mime = None, b'', ''
         self.frames = []
@@ -29,6 +30,9 @@ class EncodedSource:
         self.sequence, self.size, self.key_at, self.last_frame = 0, 0, 0, 0
         self.audio = deque()
         self.audio_sequence = self.audio_size = 0
+        self.received_frames=self.received_bytes=0
+        self.arrival_gaps=0;self.max_arrival_gap=0;self.fps=0
+        self.max_ipc_delay=self.max_sdk_gap=self.ipc_samples=0
 
     def reset(self, state='Соединение прервано. Повтор подключения…'):
         self.audio.clear(); self.audio_size = 0
@@ -46,6 +50,7 @@ class EncodedSource:
             self.reset('Ожидание первого кадра…')
             self.generation = meta['generation']
             self.mime, self.init = meta['mime'], data
+            self.fps=meta.get('fps',0)
         elif kind == 'audio' and self.init and meta['generation'] == self.generation:
             if not 10 < len(data) <= 8010 or data[:2] != b'\x0e\x02':
                 return
@@ -57,6 +62,15 @@ class EncodedSource:
                 self.audio_size -= len(self.audio.popleft()[2])
         elif kind == 'media' and self.init and meta['generation'] == self.generation:
             now = time.monotonic()
+            self.received_frames+=1;self.received_bytes+=len(data)
+            if isinstance(meta.get('worker_at'),(int,float)):
+                delay=time.time()-meta['worker_at']
+                if 0<=delay<30:
+                    self.ipc_samples+=1;self.max_ipc_delay=max(self.max_ipc_delay,delay)
+            self.max_sdk_gap=max(self.max_sdk_gap,meta.get('sdk_gap',0))
+            gap=now-self.last_frame if self.last_frame else 0
+            if gap>max(.5,4/(self.fps or 12)):
+                self.arrival_gaps+=1;self.max_arrival_gap=max(self.max_arrival_gap,gap)
             if meta['key']:
                 # Retain the preceding GOP so a polling viewer can still receive
                 # its tail when the next keyframe arrives between two sends.
@@ -142,6 +156,16 @@ class RelayPool:
         self.closed = False
         self.cache_bytes = 0
         self.motion_ids, self.motion_at = set(), 0
+        self.motion_details={}
+        self.motion_logged_at=0
+
+    def diagnostics(self):
+        now=time.monotonic()
+        return dict(motion=dict(**self.motion_details,available=self.motion(set(self.sources))['available'],
+            active_camera_ids=sorted(self.motion_ids),snapshot_age=round(now-self.motion_at,2) if self.motion_at else None),
+            sources=[dict(camera_id=cid,state=s.state,frame_age=round(now-s.last_frame,3) if s.last_frame else None,
+                received_frames=s.received_frames,received_bytes=s.received_bytes,arrival_gaps=s.arrival_gaps,
+                max_arrival_gap=round(s.max_arrival_gap,3),max_ipc_delay=round(s.max_ipc_delay,4) if s.ipc_samples else None,max_sdk_gap=round(s.max_sdk_gap,3),fps=s.fps,cache_bytes=s.size) for cid,s in self.sources.items()])
 
     def motion(self, camera_ids):
         available = bool(self.motion_at) and time.monotonic()-self.motion_at < 10
@@ -167,8 +191,11 @@ class RelayPool:
         self._ensure(self.persistent)
         self.changed.set()
 
-    def subscribe(self, camera_ids):
+    def subscribe(self, camera_ids, *, priority_ids=None):
         self._ensure(camera_ids, touch=True)
+        now=time.monotonic()
+        for cid in camera_ids if priority_ids is None else priority_ids:
+            if cid in self.sources:self.sources[cid].demanded=now
         return {cid: self.sources[cid] for cid in camera_ids if cid in self.sources}
 
     def prune(self):
@@ -182,6 +209,16 @@ class RelayPool:
         if meta.get('type') == 'motion':
             ids = meta.get('camera_ids', [])
             if isinstance(ids,list) and len(ids)<=256 and all(type(cid) is int and 1<=cid<=256 for cid in ids):
+                details=meta.get('diagnostics',{})
+                previous=self.motion_details
+                self.motion_details={key:details[key] for key in ('notifications','motion_events','other_notifications','last_notice_id','state_checks','failures','last_event','last_event_type','last_event_channel','last_event_status','foreign_alarm_messages') if key in details}
+                self.motion_details.update(method=meta.get('method'),error=meta.get('error'))
+                now=time.monotonic()
+                if not self.motion_logged_at or now-self.motion_logged_at>=60 or self.motion_details.get('notifications',0)!=previous.get('notifications',0) or meta.get('error')!=previous.get('error'):
+                    MOTION_LOG.info('available=%s method=%s notifications=%s motion_events=%s checks=%s failures=%s active=%s kind=%s channel=%s status=%s error=%s other=%s foreign=%s',
+                        bool(meta.get('available')),meta.get('method'),details.get('notifications',0),details.get('motion_events',0),details.get('state_checks',0),details.get('failures',0),
+                        ','.join(map(str,sorted(ids))),details.get('last_event_type'),details.get('last_event_channel'),details.get('last_event_status'),meta.get('error'),details.get('other_notifications',0),details.get('foreign_alarm_messages',0))
+                    self.motion_logged_at=now
                 self.motion_ids = set(ids) if meta.get('available') else set()
                 self.motion_at = time.monotonic() if meta.get('available') else 0
             return
@@ -215,7 +252,9 @@ class RelayPool:
             try:
                 process = await asyncio.create_subprocess_exec(*command, stdin=-1, stdout=-1, stderr=-3, cwd=ROOT)
                 def selection():
-                    return dict(camera_ids=list(self.sources), tokens={str(cid):s.token for cid,s in self.sources.items()})
+                    cutoff=time.monotonic()-2
+                    return dict(camera_ids=list(self.sources), tokens={str(cid):s.token for cid,s in self.sources.items()},
+                        priority_ids=[cid for cid,s in self.sources.items() if s.demanded>cutoff])
                 process.stdin.write((json.dumps(dict(config=self.config, **selection()))+'\n').encode())
                 await process.stdin.drain()
 
@@ -266,6 +305,7 @@ class RelayPool:
 
     async def replace(self, config):
         self.motion_ids, self.motion_at = set(), 0
+        self.motion_details={}
         self.device_info = None
         self.config = None
         if self.task:

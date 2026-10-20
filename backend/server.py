@@ -5,6 +5,7 @@ import hmac
 import ipaddress
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
 import struct
@@ -173,6 +174,8 @@ class Portal:
             return web.json_response({'users':[self.store.public_user(u) for u in self.store.snapshot['users'].values()]})
         if path == '/api/admin/archive/search' and method == 'POST':
             return await self.archive.search(request,data,user)
+        if path == '/api/admin/media/diagnostics' and method == 'GET':
+            return web.json_response(self.streams.diagnostics() if hasattr(self.streams,'diagnostics') else {})
         if path.startswith('/api/admin/users/') and method == 'PUT':
             await self.call(self.store.edit_user,user['id'],numeric_tail(path),data)
         elif path == '/api/admin/invites' and method == 'GET':
@@ -367,6 +370,11 @@ def create_app(store, streams=None, secure=False, auto_sync=True):
 
 def main():
     data_dir = Path(os.environ.get('DATA_DIR',ROOT/'.runtime/data'))
+    data_dir.mkdir(parents=True,exist_ok=True)
+    motion_log=logging.getLogger('motion')
+    motion_handler=RotatingFileHandler(data_dir/'motion.log',maxBytes=256*1024,backupCount=2,encoding='utf-8')
+    motion_handler.setFormatter(logging.Formatter('%(asctime)s %(message)s'))
+    motion_log.addHandler(motion_handler);motion_log.setLevel(logging.INFO);motion_log.propagate=False
     dsn = os.environ.get('DATABASE_URL','postgresql://viewer@localhost:55432/video_viewer?host='+str(ROOT/'.runtime/pgsocket'))
     if os.environ.get('DB_PASSWORD_FILE'):
         from psycopg.conninfo import make_conninfo

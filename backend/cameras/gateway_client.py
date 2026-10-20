@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import struct
+import time
 import uuid
 
 from aiohttp import ClientSession, ClientTimeout, WSMsgType
@@ -28,7 +29,9 @@ class RemotePool(RelayPool):
                             previous = None
                             while not ws.closed:
                                 self.prune()
-                                current = dict(camera_ids=sorted(self.sources),persistent_camera_ids=sorted(self.persistent),audio_camera_ids=sorted(self.sources))
+                                cutoff=time.monotonic()-2
+                                current = dict(camera_ids=sorted(self.sources),persistent_camera_ids=sorted(self.persistent),audio_camera_ids=sorted(self.sources),
+                                    priority_camera_ids=sorted(cid for cid,s in self.sources.items() if s.demanded>cutoff))
                                 if current != previous:
                                     await ws.send_json(current)
                                     previous = current

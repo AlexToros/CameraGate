@@ -102,6 +102,17 @@ class FragmentsTests(unittest.TestCase):
 
 
 class ContinuousPoolTests(unittest.IsolatedAsyncioTestCase):
+    async def test_visible_demands_merge_without_promoting_background_sources(self):
+        pool=RelayPool({'test':True})
+        try:
+            with patch.object(pool,'run',side_effect=asyncio.Event().wait),patch('backend.cameras.relay.time.monotonic',return_value=100):
+                pool.maintain([1,2,3])
+                pool.subscribe([1]);pool.subscribe([2,3],priority_ids=[2])
+                self.assertEqual({cid for cid,s in pool.sources.items() if s.demanded>99},{1,2})
+                self.assertEqual(set(pool.sources),{1,2,3})
+                self.assertEqual(pool.sources[3].touched,100)
+        finally:await pool.close()
+
     async def test_one_worker_serves_multiple_sources_and_recovers_after_process_exit(self):
         # Exercise real process/pipe lifecycle without the proprietary SDK or
         # recorder. Two source records cross one IPC pipe in a bounded batch.

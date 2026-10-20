@@ -17,6 +17,19 @@ from tests.backend.test_protocol import keyframe
 
 
 class MotionTests(unittest.TestCase):
+    def test_human_event_survives_video_mask_refresh_but_expires_without_stop(self):
+        state=MotionState()
+        event={'AlarmInfo':{'Event':'appEventHumanDetectAlarm','Channel':'13','Status':'Start'}}
+        with patch('backend.cameras.motion.time.monotonic',return_value=100):
+            self.assertTrue(state.alarm(event))
+            state.reconcile({'WorkState':{'AlarmState':{'VideoMotion':'0x1'}}})
+            self.assertEqual(state.active,{1,14})
+        with patch('backend.cameras.motion.time.monotonic',return_value=111):
+            self.assertEqual(state.active,{1})
+            state.alarm(event)
+            event['AlarmInfo']['Status']='Stop';state.alarm(event)
+            self.assertEqual(state.active,{1})
+
     def test_monitor_dependency_failure_does_not_stop_hub_or_live_workers(self):
         published=[]
         class Stop:
@@ -39,8 +52,31 @@ class MotionTests(unittest.TestCase):
         state.alarm({'Event':'VideoLoss','Channel':3,'Status':'Start'})
         state.alarm({'Event':'VideoMotion','Channel':True,'Status':'Start'})
         self.assertEqual(state.active,{2,3,64})
+        self.assertTrue(state.alarm({'AlarmInfo':{'Event':'VideoMotion','Channel':'4','Status':'Start'}}))
+        self.assertIn(5,state.active)
         with self.assertRaises(ValueError):
             state.reconcile({'WorkState':{'AlarmState':{'VideoMotion':-1}}})
+
+    def test_motion_logging_is_allowlisted_and_heartbeat_is_bounded(self):
+        pool=RelayPool()
+        meta=dict(type='motion',available=True,camera_ids=[1],method='events',diagnostics=dict(notifications=0,state_checks=1,password='private'))
+        with patch('backend.cameras.relay.MOTION_LOG.info') as log:
+            with patch('backend.cameras.relay.time.monotonic',return_value=100):pool.ingest(meta,b'')
+            with patch('backend.cameras.relay.time.monotonic',return_value=105):pool.ingest(meta,b'')
+            self.assertEqual(log.call_count,1)
+            with patch('backend.cameras.relay.time.monotonic',return_value=161):pool.ingest(meta,b'')
+            self.assertEqual(log.call_count,2)
+        self.assertNotIn('password',pool.motion_details)
+
+    def test_media_metrics_separate_callback_gap_from_ipc_delay(self):
+        from tests.backend.test_relay import initialized
+        source=initialized()
+        source.last_frame=100
+        with patch('backend.cameras.relay.time.monotonic',return_value=101),patch('backend.cameras.relay.time.time',return_value=1000):
+            source.feed(dict(type='media',generation='first',key=False,worker_at=999.997,sdk_gap=1),b'frame')
+        self.assertAlmostEqual(source.max_ipc_delay,.003)
+        self.assertEqual(source.max_sdk_gap,1);self.assertEqual(source.arrival_gaps,1)
+        self.assertEqual(source.received_frames,2)
 
     def test_one_subscription_and_one_bulk_state_query_for_many_channels(self):
         stopping=threading.Event();published=[];commands=[]

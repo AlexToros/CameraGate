@@ -98,6 +98,8 @@ class Transport:
         self.events = queue.Queue(maxsize=4096)
         self.event_lock = threading.Lock()
         self.event_bytes = 0
+        self.last_callback_at=self.max_callback_gap=0
+        self.foreign_alarm_messages=0
         self.overflow = threading.Event()
         self.buffer = bytearray()
         self.session = 0
@@ -175,6 +177,10 @@ class Transport:
     def enqueue(self, item):
         size = len(item) if isinstance(item,bytes) else 0
         with self.event_lock:
+            if size:
+                now=time.monotonic()
+                if self.last_callback_at:self.max_callback_gap=max(self.max_callback_gap,now-self.last_callback_at)
+                self.last_callback_at=now
             if self.event_bytes+size > 4*1024*1024:
                 self.overflow.set()
                 return
@@ -221,6 +227,7 @@ class Transport:
                     body = bytes(self.buffer[HEADER.size:HEADER.size + size])
                     del self.buffer[:HEADER.size + size]
                     if self.session and fields[2] != self.session:
+                        if fields[-2]==1504:self.foreign_alarm_messages+=1
                         continue
                     return fields, body
             remaining = deadline - time.monotonic()
