@@ -1,11 +1,13 @@
 import os
+import asyncio
+from pathlib import Path
 import tempfile
 import psycopg
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
 from aiohttp import web
 from backend.store import Store, password_hash
-from backend.server import create_app
+from backend.server import create_app, PORTAL
 from tests.backend.test_api import FakeStreams
 
 base = os.environ['TEST_DATABASE_URL']
@@ -24,8 +26,21 @@ with store.pool.connection() as connection:
 store.refresh()
 streams = FakeStreams()
 streams.config = {'test': True}
+app=create_app(store, streams, auto_sync=False)
+if os.environ.get('UI_ARCHIVE_SAMPLE'):
+    # Explicit synthetic media fixture, never a real recorder connection.
+    sample=Path(os.environ['UI_ARCHIVE_SAMPLE']).read_bytes()
+    class SyntheticRecorder:
+        async def search(self,config,cid,date,cursor=None):
+            return dict(type='result',files=[dict(file='/synthetic/record',start=date+' 10:00:00',end=date+' 11:00:00')],cursor=None)
+        async def records(self,config,request):
+            yield dict(type='init'),sample[:24]
+            await asyncio.sleep(1.5)
+            yield dict(type='media'),sample[24:]
+            yield dict(type='end'),b''
+    app[PORTAL].archive.recorder=SyntheticRecorder()
 try:
-    web.run_app(create_app(store, streams, auto_sync=False), host='127.0.0.1', port=int(os.environ.get('UI_TEST_PORT', '8082')), access_log=None)
+    web.run_app(app, host='127.0.0.1', port=int(os.environ.get('UI_TEST_PORT', '8082')), access_log=None)
 finally:
     store.close()
     runtime.cleanup()

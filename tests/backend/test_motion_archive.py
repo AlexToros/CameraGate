@@ -114,6 +114,28 @@ class MotionTests(unittest.TestCase):
 
 
 class ArchiveProtocolTests(unittest.TestCase):
+    def test_export_stops_at_selected_end_even_if_device_sends_a_whole_file(self):
+        from types import SimpleNamespace
+        commands=[];emitted=[]
+        stamp=((2026-2000)<<26)|(10<<22)|(20<<17)
+        class Parser:
+            def feed_units(self,body,key_times):
+                key_times[0]=stamp
+                return [(b'frame',index==0,2,10) for index in range(100)]
+        class Transport:
+            def command(self,name):return {}
+            def request(self,*args,**kwargs):return (),{'Ret':100}
+            def send(self,mid,payload):commands.append(payload.copy())
+            def receive(self,timeout):return (0,1422,0),b'whole file'
+        muxer=SimpleNamespace(mime='video/mp4',init=b'init',codec=2,fps=10,parameters=(),fragment=lambda video,key:b'fragment')
+        entry=dict(cid=1,file='/private/file',start='2026-10-20 00:00:00',end='2026-10-20 01:00:00')
+        with patch('backend.cameras.recorder_worker.Frames',Parser),patch('backend.cameras.recorder_worker.Muxer',return_value=muxer),patch('backend.cameras.recorder_worker.parameter_sets',return_value=()):
+            playback(Transport(),dict(entry=entry,offset=0,end_offset=2),lambda meta,data=b'':emitted.append((meta,data)))
+        self.assertEqual(sum(meta['type']=='media' for meta,_ in emitted),20)
+        self.assertEqual(commands[0]['OPPlayBack']['EndTime'],'2026-10-20 00:00:02')
+        self.assertEqual(commands[-1]['OPPlayBack']['Action'],'Stop')
+        self.assertEqual(emitted[-1][0]['type'],'end')
+
     def test_fragmented_batch_preserves_each_keyframe_time(self):
         one=bytearray(keyframe(b'first'));two=bytearray(keyframe(b'second'))
         struct.pack_into('<I',one,8,111);struct.pack_into('<I',two,8,222)

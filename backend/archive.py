@@ -10,6 +10,7 @@ from aiohttp import web
 
 from .cameras.recorder import make_recorder
 from .store import Problem
+from .archive_export import ArchiveExport
 
 
 def search_input(data, cameras):
@@ -43,6 +44,7 @@ class Archive:
         self.viewers={}
         self.finished={}
         self.locks={}
+        self.export=ArchiveExport(self)
 
     async def search(self, request, data, user):
         cid,date,cursor=search_input(data,self.portal.store.snapshot['cameras'])

@@ -308,3 +308,5 @@ body:has(dialog[open]){overflow:hidden}
 .tile-drag:hover{background:#496073;color:white}
 .wall-reordering,.wall-reordering *{cursor:grabbing!important;user-select:none!important}
 @media(pointer:coarse){.tile-drag{width:30px;min-width:30px;height:38px;min-height:38px}}
+.export-link{display:flex;justify-content:center;align-items:center;min-height:43px;padding:10px 12px;border-radius:6px;text-decoration:none}
+.archive-export-form input{min-width:0;max-width:100%}

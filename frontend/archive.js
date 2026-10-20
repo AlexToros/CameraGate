@@ -1,11 +1,12 @@
 /* On-demand recorder playback. Live players and their caches stay separate. */
-let archiveViewer=null;
-function stopArchive() { archiveViewer?.close();archiveViewer=null; }
+let archiveViewer=null,archiveDownload=null;
+function stopArchive() { archiveDownload?.close();archiveDownload=null;archiveViewer?.close();archiveViewer=null; }
 
 class ArchivePlayer {
   constructor(container,record,onStatus) {
     this.container=container;this.record=record;this.onStatus=onStatus;
     this.video=container.querySelector('video');this.slider=container.querySelector('[data-position]');
+    container.querySelector('[data-download]').onclick=()=>{if(this.running)this.pause();archiveDownload?.close();archiveDownload=new ArchiveDownload(record,this.position);};
     this.button=container.querySelector('[data-play]');this.clock=container.querySelector('[data-clock]');
     this.events=new AbortController();this.epoch=0;this.position=0;this.offset=0;this.closed=false;this.retryCount=0;
     this.slider.max=String(Math.max(1,record.duration));this.slider.value='0';
@@ -120,7 +121,7 @@ class ArchivePlayer {
 function renderArchive(body) {
   stopArchive();
   const today=new Date(), date=`${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
-  body.innerHTML=`${sectionHead('Архив')}<div class="archive-body"><form class="archive-search"><label>Камера<select name="camera_id" required>${state.cameras.map(camera=>`<option value="${camera.id}">${h(camera.name)}</option>`).join('')}</select></label><label>Дата<input name="date" type="date" required value="${date}"></label><button class="primary" type="submit">Найти</button></form><p class="field-hint">Время регистратора</p><p class="archive-error error" role="alert"></p><section class="archive-view" hidden><video muted autoplay playsinline></video><div class="archive-controls"><button type="button" data-play>Пауза</button><output data-clock></output><input type="range" data-position aria-label="Позиция в записи" min="0" step="1"><button type="button" class="icon-button" data-fullscreen aria-label="На весь экран">${icon('expand')}</button></div><p class="archive-status" role="status"></p></section><div class="archive-records object-list"></div><button type="button" class="archive-more" hidden>Ещё</button></div>`;
+  body.innerHTML=`${sectionHead('Архив')}<div class="archive-body"><form class="archive-search"><label>Камера<select name="camera_id" required>${state.cameras.map(camera=>`<option value="${camera.id}">${h(camera.name)}</option>`).join('')}</select></label><label>Дата<input name="date" type="date" required value="${date}"></label><button class="primary" type="submit">Найти</button></form><p class="field-hint">Время регистратора</p><p class="archive-error error" role="alert"></p><section class="archive-view" hidden><video muted autoplay playsinline></video><div class="archive-controls"><button type="button" data-play>Пауза</button><button type="button" data-download>Скачать</button><output data-clock></output><input type="range" data-position aria-label="Позиция в записи" min="0" step="1"><button type="button" class="icon-button" data-fullscreen aria-label="На весь экран">${icon('expand')}</button></div><p class="archive-status" role="status"></p></section><div class="archive-records object-list"></div><button type="button" class="archive-more" hidden>Ещё</button></div>`;
   bindAdminHeader(body);
   const form=body.querySelector('form'), list=body.querySelector('.archive-records'),more=body.querySelector('.archive-more'),error=body.querySelector('.archive-error'),view=body.querySelector('.archive-view');
   let cursor=null,epoch=0,query=null;
@@ -156,4 +157,65 @@ function renderArchive(body) {
     finally{if(epoch===current){submit.disabled=more.disabled=false;submit.textContent='Найти';more.textContent='Ещё';form.querySelectorAll('input,select').forEach(input=>input.disabled=false);form.removeAttribute('aria-busy');list.removeAttribute('aria-busy');}}
   };
   form.onsubmit=event=>{event.preventDefault();search(false);};more.onclick=()=>search(true);
+}
+
+class ArchiveDownload {
+  constructor(record,position) {
+    this.events=new AbortController();this.closed=false;this.record=record;
+    const stamp=offset=>{
+      const date=new Date(record.start.replace(' ','T'));date.setSeconds(date.getSeconds()+offset);
+      return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}T${date.toTimeString().slice(0,8)}`;
+    };
+    const start=Math.max(0,Math.min(Math.floor(position),Math.max(0,record.duration-1)));
+    dialog('Скачать фрагмент',`<form class="stack archive-export-form"><label>Начало<input name="start" type="datetime-local" step="1" required min="${stamp(0)}" max="${stamp(record.duration)}" value="${stamp(start)}"></label><label>Конец<input name="end" type="datetime-local" step="1" required min="${stamp(0)}" max="${stamp(record.duration)}" value="${stamp(Math.min(record.duration,start+60))}"></label><p class="field-hint">MP4 · без звука · до 15 минут</p><p class="error" role="alert"></p><p class="export-status" role="status"></p><button class="primary" type="submit">Подготовить</button><a class="button primary export-link" hidden download>Скачать MP4</a></form>`);
+    this.form=modal.querySelector('form');this.status=this.form.querySelector('.export-status');
+    modal.addEventListener('close',()=>this.close(),{signal:this.events.signal});
+    this.form.onsubmit=event=>{event.preventDefault();this.prepare();};
+  }
+  async request(path,method='GET',data) {
+    const response=await fetch(path,{method,credentials:'same-origin',cache:'no-store',signal:this.events.signal,
+      headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},...(data ? {body:JSON.stringify(data)} : {})});
+    const value=await response.json();if(!response.ok)throw new Error(value.error || 'Не удалось подготовить фрагмент');return value;
+  }
+  async prepare() {
+    const inputs=new FormData(this.form),origin=new Date(this.record.start.replace(' ','T'));
+    const start=(new Date(inputs.get('start'))-origin)/1000,end=(new Date(inputs.get('end'))-origin)/1000;
+    const error=this.form.querySelector('.error'),button=this.form.querySelector('[type=submit]');error.textContent='';
+    if(!Number.isInteger(start) || !Number.isInteger(end) || start<0 || end>this.record.duration || start>=end){error.textContent='Укажите интервал внутри выбранной записи';return;}
+    if(end-start>900){error.textContent='Можно скачать до 15 минут за один раз';return;}
+    button.disabled=true;this.form.querySelectorAll('input').forEach(input=>input.disabled=true);
+    this.status.innerHTML='<span class="search-spinner" aria-hidden="true"></span> Готовим фрагмент…';
+    try {
+      const result=await this.request('/api/admin/archive/exports','POST',{id:this.record.id,start,end});
+      if(this.closed)return;
+      this.id=result.id;this.poll();
+    }catch(e){if(!this.closed)this.fail(e.message);}
+  }
+  async poll() {
+    try {
+      const result=await this.request('/api/admin/archive/exports/'+this.id);
+      if(this.closed)return;
+      if(result.state==='error'){this.fail(result.error);return;}
+      if(result.state==='ready') {
+        this.status.textContent='';this.form.querySelector('[type=submit]').hidden=true;
+        const link=this.form.querySelector('.export-link');link.href='/api/admin/archive/exports/'+this.id+'/download';link.hidden=false;
+        link.onclick=()=>{this.handedOff=true;};return;
+      }
+      this.timer=setTimeout(()=>this.poll(),1000);
+    }catch(e){if(!this.closed)this.fail(e.message);}
+  }
+  discard() {
+    if(!this.id || this.handedOff)return;
+    fetch('/api/admin/archive/exports/'+this.id,{method:'DELETE',credentials:'same-origin',keepalive:true,headers:{'X-CSRF-Token':csrf}}).catch(()=>{});
+    this.id=null;
+  }
+  fail(message) {
+    this.discard();this.status.textContent='';this.form.querySelector('.error').textContent=message;
+    this.form.querySelector('[type=submit]').disabled=false;this.form.querySelectorAll('input').forEach(input=>input.disabled=false);
+  }
+  close() {
+    if(this.closed)return;
+    this.closed=true;clearTimeout(this.timer);this.discard();this.events.abort();
+    if(archiveDownload===this){archiveDownload=null;if(modal.open)modal.close();}
+  }
 }

@@ -445,5 +445,137 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(error.exception.status, 403)
 
 
+    async def export_record(self, recorder=None):
+        archive=self.app[PORTAL].archive
+        archive.recorder=recorder or FakeRecorder()
+        self.streams.config={'test':True}
+        result=await (await self.client.post('/api/admin/archive/search',headers=self.headers,json=dict(camera_id=1,date='2026-10-20'))).json()
+        return result['records'][0]['id']
+
+    async def test_export_validates_role_csrf_owner_expiry_and_range_before_worker(self):
+        record=await self.export_record()
+        manager=self.app[PORTAL].archive.export
+        data=dict(id=record,start=0,end=60)
+        _,viewer_headers,_=await self.viewer()
+        self.assertEqual((await self.client.post('/api/admin/archive/exports',headers=viewer_headers,json=data)).status,403)
+        self.assertEqual((await self.client.post('/api/admin/archive/exports',json=data)).status,403)
+        for changes in (dict(id='/private/file'),dict(id=[]),dict(start=True),dict(start=-1),dict(end=0),dict(end=901),dict(end=3601),dict(start=1.5)):
+            response=await self.client.post('/api/admin/archive/exports',headers=self.headers,json=dict(data,**changes))
+            self.assertIn(response.status,(400,404))
+        entry=self.app[PORTAL].archive.entries[record]
+        entry['created']-=7201
+        self.assertEqual((await self.client.post('/api/admin/archive/exports',headers=self.headers,json=data)).status,404)
+        self.assertIsNone(manager.job)
+        self.assertEqual(self.app[PORTAL].archive.recorder.play_calls,[])
+
+    async def test_export_cancel_closes_reader_and_frees_only_export_slot(self):
+        recorder=FakeRecorder();record=await self.export_record(recorder)
+        manager=self.app[PORTAL].archive.export
+        response=await self.client.post('/api/admin/archive/exports',headers=self.headers,json=dict(id=record,start=30,end=40))
+        self.assertEqual(response.status,202)
+        export_id=(await response.json())['id'];path='/api/admin/archive/exports/'+export_id
+        await asyncio.sleep(.02)
+        self.assertEqual(recorder.play_calls[0]['end_offset'],40)
+        self.assertEqual(recorder.play_calls[0]['offset'],30)
+        self.assertEqual((await self.client.post('/api/admin/archive/exports',headers=self.headers,json=dict(id=record,start=0,end=1))).status,429)
+        self.assertEqual((await self.client.get(path+'/download')).status,409)
+        self.assertEqual((await self.client.delete(path)).status,403)
+        response=await self.client.delete(path,headers=self.headers)
+        self.assertEqual(response.status,200)
+        self.assertTrue(recorder.closed.is_set());self.assertIsNone(manager.job)
+        self.assertEqual((await self.client.get(path)).status,404)
+        self.assertEqual(self.app[PORTAL].archive.viewers,{})
+
+    async def test_export_abort_on_role_revocation_and_session_logout(self):
+        for change in ('role','session','config','idle'):
+            # Restore the actual administrator between subcases.
+            if change!='role':
+                with self.store.pool.connection() as connection:
+                    connection.execute("UPDATE users SET role='admin',blocked=false WHERE id=%s",(self.me['user']['id'],))
+                self.store.refresh()
+            if change=='config':
+                # The preceding logout requires a fresh legitimate login.
+                response=await self.client.post('/api/auth/login',json=dict(login='admin',password=PASSWORD))
+                self.client.session.cookie_jar.update_cookies(response.cookies)
+                self.client.session.headers.pop('Cookie',None)
+                self.me=await (await self.client.get('/api/me')).json();self.headers={'X-CSRF-Token':self.me['csrf']}
+            recorder=FakeRecorder();record=await self.export_record(recorder)
+            result=await (await self.client.post('/api/admin/archive/exports',headers=self.headers,json=dict(id=record,start=0,end=1))).json()
+            manager=self.app[PORTAL].archive.export;job=manager.job
+            await asyncio.sleep(.02)
+            if change=='role':
+                with self.store.pool.connection() as connection:
+                    connection.execute("UPDATE users SET role='user' WHERE id=%s",(self.me['user']['id'],))
+                self.store.refresh()
+            elif change=='session':
+                await self.client.post('/api/auth/logout',headers=self.headers,json={})
+            elif change=='config':self.streams.config={'different':True}
+            else:job['touched']-=31
+            for _ in range(30):
+                if manager.job is None:break
+                await asyncio.sleep(.1)
+            self.assertIsNone(manager.job,change);self.assertTrue(recorder.closed.is_set(),change)
+
+    async def test_export_size_limit_and_worker_failure_have_no_download(self):
+        class TooLarge(FakeRecorder):
+            async def records(self,config,request):
+                yield dict(type='media'),b'12345'
+        record=await self.export_record(TooLarge())
+        manager=self.app[PORTAL].archive.export
+        with patch('backend.archive_export.MAX_BYTES',4):
+            result=await (await self.client.post('/api/admin/archive/exports',headers=self.headers,json=dict(id=record,start=0,end=1))).json()
+            await manager.job['task']
+        self.assertEqual(manager.job['state'],'error')
+        self.assertIn('слишком большой',manager.job['error'])
+        self.assertFalse(__import__('pathlib').Path(manager.job['directory'].name).exists())
+        self.assertEqual((await self.client.get('/api/admin/archive/exports/'+result['id']+'/download')).status,409)
+
+    async def test_export_finalizes_playable_mp4_and_streams_attachment_without_private_paths(self):
+        import os
+        from pathlib import Path
+        binary=os.environ['FFMPEG_BINARY']
+        with tempfile.TemporaryDirectory() as temp:
+            source=Path(temp)/'source.mp4'
+            process=await asyncio.create_subprocess_exec(binary,'-hide_banner','-loglevel','error','-f','lavfi','-i','testsrc=size=160x120:rate=10',
+                '-t','2','-c:v','libx264','-bf','0','-threads','1','-pix_fmt','yuv420p','-movflags','empty_moov+default_base_moof+frag_keyframe',str(source))
+            self.assertEqual(await process.wait(),0)
+            sample=source.read_bytes()
+            class Complete(FakeRecorder):
+                async def records(self,config,request):
+                    try:
+                        yield dict(type='init'),sample[:24]
+                        yield dict(type='media'),sample[24:]
+                        yield dict(type='end'),b''
+                    finally:self.closed.set()
+            recorder=Complete();record=await self.export_record(recorder)
+            result=await (await self.client.post('/api/admin/archive/exports',headers=self.headers,json=dict(id=record,start=0,end=2))).json()
+            manager=self.app[PORTAL].archive.export;job=manager.job
+            await job['task'];self.assertEqual(job['state'],'ready',job.get('error'))
+            path='/api/admin/archive/exports/'+result['id']
+            invitation=self.store.invite(self.me['user']['id'],dict(first_name='Other',last_name='Admin',role='admin'))
+            other=self.store.register(dict(login='other-admin',password=PASSWORD,token=invitation['token']))
+            other_headers={'Cookie':COOKIE+'='+other}
+            self.assertEqual((await self.client.get(path,headers=other_headers)).status,404)
+            self.assertEqual((await self.client.get(path+'/download',headers=other_headers)).status,404)
+            self.assertNotIn('/private',str(await (await self.client.get(path)).json()))
+            self.assertTrue(recorder.closed.is_set())
+            _,viewer_headers,_=await self.viewer()
+            self.assertEqual((await self.client.get(path+'/download',headers=viewer_headers)).status,403)
+            self.assertEqual((await self.client.get(path+'/download',headers={'Origin':'https://evil.example'})).status,403)
+            response=await self.client.get(path+'/download')
+            self.assertEqual(response.status,200);self.assertEqual(response.headers['Content-Type'],'video/mp4')
+            self.assertIn('attachment; filename="camera-1_',response.headers['Content-Disposition'])
+            self.assertEqual(response.headers['Cache-Control'],'no-store')
+            exported=await response.read();self.assertGreater(len(exported),1000)
+            self.assertLess(exported.index(b'moov'),exported.index(b'mdat'))
+            target=Path(temp)/'download.mp4';target.write_bytes(exported)
+            process=await asyncio.create_subprocess_exec(binary,'-hide_banner','-loglevel','error','-i',str(target),'-f','null','-',stdout=-3,stderr=-3)
+            self.assertEqual(await process.wait(),0)
+            for _ in range(20):
+                if manager.job is None:break
+                await asyncio.sleep(.01)
+            self.assertIsNone(manager.job);self.assertFalse(Path(job['directory'].name).exists())
+
+
 if __name__ == '__main__':
     unittest.main()

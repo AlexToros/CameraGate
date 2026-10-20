@@ -3,7 +3,7 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('nod
 function fixture(){
  const sockets=[],timers=new Map(),status=[];let id=0;
  const video={currentTime:0,paused:true,handlers:{},addEventListener(name,fn){this.handlers[name]=fn;},pause(){this.paused=true;},load(){this.currentTime=0;},removeAttribute(){},play(){this.paused=false;return Promise.resolve();}};
- const nodes={video,'[data-position]':{},'[data-play]':{},'[data-clock]':{},'[data-fullscreen]':{}};
+ const nodes={video,'[data-position]':{},'[data-play]':{},'[data-download]':{},'[data-clock]':{},'[data-fullscreen]':{}};
  class Socket{constructor(){sockets.push(this);this.sent=[];}send(v){this.sent.push(JSON.parse(v));}close(){this.onclose?.();}}
  const context=vm.createContext({AbortController,Date,Math,JSON,WebSocket:Socket,csrf:'test',location:{protocol:'https:',host:'example.test'},URL:{revokeObjectURL(){}},setTimeout(fn,delay){timers.set(++id,{fn,delay});return id;},clearTimeout(id){timers.delete(id);}});
  vm.runInContext(fs.readFileSync('frontend/archive.js','utf8')+'\nglobalThis.Player=ArchivePlayer;',context);

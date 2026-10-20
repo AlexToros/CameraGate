@@ -70,13 +70,18 @@ def playback(transport, request, emit):
     payload = transport.command('OPPlayBack')
     params = dict(PlayMode='ByName', FileName=entry['file'], Channel=entry['cid']-1,
         StreamType=0, Value=0, TransMode='TCP')
-    operation = dict(Parameter=params, StartTime=start.strftime(FORMAT), EndTime=entry['end'])
+    limit=request.get('end_offset')
+    end=datetime.strptime(entry['start'],FORMAT)+timedelta(seconds=limit) if limit is not None else datetime.strptime(entry['end'],FORMAT)
+    operation = dict(Parameter=params, StartTime=start.strftime(FORMAT), EndTime=end.strftime(FORMAT))
     payload['OPPlayBack'] = dict(operation, Action='Claim')
     transport.request(1424,payload,timeout=8)
     payload['OPPlayBack'] = dict(operation, Action='Start')
     transport.send(1420,payload)
     frames, muxer = Frames(), None
     started = last = keepalive = time.monotonic()
+    origin=datetime.strptime(entry['start'],FORMAT)
+    position=request.get('offset',0)
+    complete=False
     try:
         while True:
             now = time.monotonic()
@@ -107,18 +112,25 @@ def playback(transport, request, emit):
             key_times={}
             units=frames.feed_units(body,key_times=key_times)
             for index,(video,key,codec,fps) in enumerate(units):
+                actual=frame_time(key_times.get(index)) if key else None
+                if actual:
+                    position=(actual-origin).total_seconds()
+                if limit is not None and position>=limit:
+                    complete=True
+                    break
                 params=parameter_sets(video,codec) if key else ()
                 if muxer is None:
                     if not key:
                         continue
                     muxer=Muxer(video,codec,fps)
-                    actual=frame_time(key_times.get(index))
-                    origin=datetime.strptime(entry['start'],FORMAT)
                     emit(dict(type='init',mime=muxer.mime,
                         offset=max(0,(actual-origin).total_seconds()) if actual else request.get('offset',0)),muxer.init)
                 elif codec!=muxer.codec or fps!=muxer.fps or (params and params!=muxer.parameters):
                     raise ValueError('Archive codec changed')
                 emit(dict(type='media'),muxer.fragment(video,key))
+                position+=1/fps
+            if complete:
+                break
     finally:
         payload['OPPlayBack']=dict(operation,Action='Stop')
         try:

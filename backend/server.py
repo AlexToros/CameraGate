@@ -174,6 +174,8 @@ class Portal:
             return web.json_response({'users':[self.store.public_user(u) for u in self.store.snapshot['users'].values()]})
         if path == '/api/admin/archive/search' and method == 'POST':
             return await self.archive.search(request,data,user)
+        if path == '/api/admin/archive/exports' and method == 'POST':
+            return await self.archive.export.create(request,data,user)
         if path == '/api/admin/media/diagnostics' and method == 'GET':
             return web.json_response(self.streams.diagnostics() if hasattr(self.streams,'diagnostics') else {})
         if path.startswith('/api/admin/users/') and method == 'PUT':
@@ -340,6 +342,9 @@ def create_app(store, streams=None, secure=False, auto_sync=True):
     app[PORTAL] = portal
     app.router.add_get('/api/live',portal.live)
     app.router.add_get('/api/admin/archive/play',portal.archive.play)
+    app.router.add_get('/api/admin/archive/exports/{export_id}',portal.archive.export.status)
+    app.router.add_delete('/api/admin/archive/exports/{export_id}',portal.archive.export.cancel)
+    app.router.add_get('/api/admin/archive/exports/{export_id}/download',portal.archive.export.download,allow_head=False)
     app.router.add_route('*','/api/{tail:.*}',portal.api)
     assets = {'/':'index.html','/app.js':'app.js','/admin.js':'admin.js','/archive.js':'archive.js','/reorder.js':'reorder.js','/audio.js':'audio.js','/player.js':'player.js','/style.css':'style.css','/manifest.webmanifest':'manifest.webmanifest',
               '/sw.js':'sw.js','/icon-192.png':'icons/icon-192.png','/icon-512.png':'icons/icon-512.png','/apple-touch-icon.png':'icons/apple-touch-icon.png'}
@@ -355,6 +360,7 @@ def create_app(store, streams=None, secure=False, auto_sync=True):
     app.router.add_get('/health',health)
     async def startup(app):
         portal.background_task(portal.maintain_streams())
+        portal.background_task(portal.archive.export.maintain())
         if auto_sync:
             portal.background_task(portal.sync())
     async def shutdown(app):
