@@ -223,13 +223,9 @@ function renderTiles() {
     tileObserver.observe(element);
     drawCached(tile,element);
   });
-  stopWallReorder=enableWallReorder(wall,(sourceId,targetId)=>{
-    const from=state.layout.tiles.findIndex(tile=>tile.id===sourceId),to=state.layout.tiles.findIndex(tile=>tile.id===targetId);
-    if(from<0 || to<0 || from===to)return;
+  stopWallReorder=enableWallReorder(wall,ids=>{
+    state.layout.tiles=ids.map(id=>tilesById.get(id));
     const nodes=new Map([...wall.querySelectorAll('.tile')].map(element=>[element.dataset.tile,element]));
-    const source=nodes.get(sourceId),target=nodes.get(targetId),reference=from<to ? target.nextElementSibling : target;
-    state.layout.tiles.splice(to,0,state.layout.tiles.splice(from,1)[0]);
-    if(wall.moveBefore)wall.moveBefore(source,reference);else wall.insertBefore(source,reference);
     state.layout.tiles.forEach((tile,index)=>{
       const element=nodes.get(tile.id),name=cameras.get(tile.camera_id)?.name || `Экран ${index+1}`;
       element.setAttribute('aria-label',`Экран ${index+1}`);
@@ -409,7 +405,7 @@ function installPullToRefresh() {
   },{passive:true});
   document.addEventListener("touchmove",event=>{
     if(!start)return;
-    if(event.touches.length!==1 || document.scrollingElement.scrollTop>0){reset();return;}
+    if(document.body.classList.contains("wall-reordering") || event.touches.length!==1 || document.scrollingElement.scrollTop>0){reset();return;}
     const dy=event.touches[0].clientY-start.y,dx=Math.abs(event.touches[0].clientX-start.x);
     if(dy<0 || dx>Math.max(12,dy)){reset();return;}
     distance=dy;

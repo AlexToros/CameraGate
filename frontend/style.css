@@ -48,9 +48,9 @@ a{color:var(--blue)}
 .toolbar>.row{gap:6px}
 .icon-button{padding:0;min-width:32px;min-height:32px;flex:none}
 .wall{display:grid;grid-template-columns:repeat(var(--columns,1),minmax(0,1fr));grid-auto-rows:2px;gap:4px;padding:0 8px 12px;align-items:start;grid-auto-flow:row dense}
-.tile{position:relative;overflow:hidden;background:#26333f;border:1px solid #314353;border-radius:4px;min-width:0;width:100%;grid-column:span var(--width,1)}
-.tile.dragging{opacity:.4}
-.tile.drop{outline:3px solid #5e9cc9;outline-offset:-3px}
+.tile{cursor:grab;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;position:relative;overflow:hidden;background:#26333f;border:1px solid #314353;border-radius:4px;min-width:0;width:100%;grid-column:span var(--width,1)}
+.tile.dragging{opacity:.94;z-index:1000;pointer-events:none;box-shadow:0 12px 36px #0008;outline:2px solid #8bc7f2;transform-origin:center;will-change:transform}
+.tile-placeholder{min-width:0;border:2px dashed #76aacf;border-radius:4px;background:#284b624d;color:#517c98;display:grid;place-items:center;text-align:center;padding:8px;font-size:12px;overflow:hidden}
 .tile-head{display:flex;align-items:center;gap:6px;padding:0 3px 0 8px;background:#314353;color:#e8eef2;height:26px;min-width:0;cursor:grab}
 .tile-head:active{cursor:grabbing}
 .status-dot{width:5px;height:5px;background:#8093a3;border-radius:50%;flex:none}
@@ -307,5 +307,4 @@ body:has(dialog[open]){overflow:hidden}
 .tile-drag svg{width:14px;height:18px}
 .tile-drag:hover{background:#496073;color:white}
 .wall-reordering,.wall-reordering *{cursor:grabbing!important;user-select:none!important}
-.tile-drag-ghost{position:fixed;left:0;top:0;z-index:1000;pointer-events:none;max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:8px 12px;border-radius:6px;background:#314353;color:#fff;box-shadow:0 4px 16px #0004;font-size:13px}
 @media(pointer:coarse){.tile-drag{width:30px;min-width:30px;height:38px;min-height:38px}}
