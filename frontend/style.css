@@ -120,10 +120,10 @@ dialog::backdrop{background:#233b5270}
  .toolbar{padding:5px 8px}
  .toolbar button{min-height:36px}
  .wall{padding:0 4px 10px;gap:4px}
- .tile-head{height:36px;padding-left:6px;gap:4px}
- .camera-trigger{height:36px;min-height:36px;line-height:36px;font-size:11px}
- .camera-trigger svg{top:11px}
- .tile-menu{min-width:32px;min-height:34px}
+ .tile-head{height:28px;padding-left:4px;gap:3px}
+ .camera-trigger{height:28px;min-height:28px;line-height:28px;font-size:11px}
+ .camera-trigger svg{top:7px}
+ .tile-menu{min-width:32px;min-height:28px}
  .tile-head[draggable]{cursor:default}
  .tile-expand{opacity:1;min-width:32px;min-height:32px;right:4px;bottom:4px}
  .stream-state{font-size:11px;padding:10px}
@@ -136,11 +136,11 @@ dialog::backdrop{background:#233b5270}
  .camera-choice{min-height:48px}
 }
 @media(pointer:coarse){
- .tile-head{height:40px}
- .camera-trigger{height:40px;min-height:40px;line-height:40px}
- .camera-trigger svg{top:13px}
- .tile-menu{min-width:40px;min-height:40px}
- .tile-expand{opacity:1;min-width:40px;min-height:40px}
+ .tile-head{height:28px;padding-left:4px;gap:3px}
+ .camera-trigger{height:28px;min-height:28px;line-height:28px}
+ .camera-trigger svg{top:7px}
+ .tile-menu{min-width:32px;min-height:28px}
+ .tile-expand{opacity:1;width:32px;height:32px;min-width:32px;min-height:32px}
 }
 @media(max-width:520px){
  .brand strong,.identity{display:none}
@@ -276,7 +276,10 @@ body:has(dialog[open]){overflow:hidden}
 
 .tile-audio{position:absolute;left:6px;bottom:6px;z-index:3;width:36px;height:36px;min-height:36px;border:0;background:#102536aa;color:white;opacity:.8}
 .tile-audio:hover,.tile-audio[aria-pressed="true"]{background:#245f8d;color:white;opacity:1}
-@media(pointer:coarse){.tile-audio{width:44px;height:44px;min-height:44px}}
+@media(pointer:coarse){
+ .tile-audio{width:32px;height:32px;min-height:32px;left:4px;bottom:4px}
+ .picture:is(:fullscreen,.video-expanded) :is(.tile-audio,.tile-expand){width:44px;height:44px;min-width:44px;min-height:44px}
+}
 
 .tile-motion{display:inline-flex;flex:none;color:#91e5ac;align-items:center}
 .tile:not(.live) .tile-motion{visibility:hidden}
@@ -308,6 +311,6 @@ body:has(dialog[open]){overflow:hidden}
 .tile-drag svg{width:14px;height:18px}
 .tile-drag:hover{background:#496073;color:white}
 .wall-reordering,.wall-reordering *{cursor:grabbing!important;user-select:none!important}
-@media(pointer:coarse){.tile-drag{width:30px;min-width:30px;height:38px;min-height:38px}}
+@media(pointer:coarse){.tile-drag{width:24px;min-width:24px;height:28px;min-height:28px}}
 .export-link{display:flex;justify-content:center;align-items:center;min-height:43px;padding:10px 12px;border-radius:6px;text-decoration:none}
 .archive-export-form input{min-width:0;max-width:100%}
