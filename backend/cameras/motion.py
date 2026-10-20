@@ -51,9 +51,10 @@ class MotionState:
 
 class MotionMonitor:
     """One control connection for all cameras; failure never stops media."""
-    def __init__(self, hub, config, outbox, stopping, connecting):
+    def __init__(self, hub, config, outbox, stopping, connecting, session=None):
         self.hub, self.config, self.outbox = hub, config, outbox
         self.stopping, self.connecting = stopping, connecting
+        self.session=session
         self.diagnostics=dict(notifications=0,motion_events=0,other_notifications=0,last_notice_id=None,state_checks=0,failures=0,last_event=None,last_event_type=None,last_event_channel=None,last_event_status=None)
 
     def publish(self, state=None, method=None, error=None):
@@ -65,11 +66,15 @@ class MotionMonitor:
         while not self.stopping.is_set():
             transport = None
             try:
-                with self.connecting:
-                    if self.stopping.is_set():
-                        return
-                    transport = Transport(None, self.config['SERIAL_NUM'], hub=self.hub)
-                    info = transport.login(self.config, timeout=5)
+                if self.session is not None:
+                    transport=self.session.listen(self.stopping)
+                    info=transport.login(self.config)
+                else:
+                    with self.connecting:
+                        if self.stopping.is_set():
+                            return
+                        transport = Transport(None, self.config['SERIAL_NUM'], hub=self.hub)
+                        info = transport.login(self.config, timeout=5)
                 state = MotionState()
                 # Guard subscribes this session to notifications. It does not
                 # enable detection or modify any recorder configuration.

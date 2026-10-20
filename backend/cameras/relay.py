@@ -33,6 +33,7 @@ class EncodedSource:
         self.received_frames=self.received_bytes=0
         self.arrival_gaps=0;self.max_arrival_gap=0;self.fps=0
         self.max_ipc_delay=self.max_sdk_gap=self.ipc_samples=0
+        self.initializations=0;self.init_reason=None;self.max_initialization_ms=0
 
     def reset(self, state='Соединение прервано. Повтор подключения…'):
         self.audio.clear(); self.audio_size = 0
@@ -47,6 +48,9 @@ class EncodedSource:
             self.generation = meta['generation']
             self.reset(meta['state'])
         elif kind == 'init':
+            self.initializations+=1
+            self.init_reason=meta.get('reason')
+            self.max_initialization_ms=max(self.max_initialization_ms,meta.get('initialization_ms',0))
             self.reset('Ожидание первого кадра…')
             self.generation = meta['generation']
             self.mime, self.init = meta['mime'], data
@@ -158,14 +162,16 @@ class RelayPool:
         self.motion_ids, self.motion_at = set(), 0
         self.motion_details={}
         self.motion_logged_at=0
+        self.session_details={}
 
     def diagnostics(self):
         now=time.monotonic()
-        return dict(motion=dict(**self.motion_details,available=self.motion(set(self.sources))['available'],
+        return dict(session=self.session_details.copy(),motion=dict(**self.motion_details,available=self.motion(set(self.sources))['available'],
             active_camera_ids=sorted(self.motion_ids),snapshot_age=round(now-self.motion_at,2) if self.motion_at else None),
             sources=[dict(camera_id=cid,state=s.state,frame_age=round(now-s.last_frame,3) if s.last_frame else None,
                 received_frames=s.received_frames,received_bytes=s.received_bytes,arrival_gaps=s.arrival_gaps,
-                max_arrival_gap=round(s.max_arrival_gap,3),max_ipc_delay=round(s.max_ipc_delay,4) if s.ipc_samples else None,max_sdk_gap=round(s.max_sdk_gap,3),fps=s.fps,cache_bytes=s.size) for cid,s in self.sources.items()])
+                max_arrival_gap=round(s.max_arrival_gap,3),max_ipc_delay=round(s.max_ipc_delay,4) if s.ipc_samples else None,max_sdk_gap=round(s.max_sdk_gap,3),fps=s.fps,cache_bytes=s.size,
+                initializations=s.initializations,init_reason=s.init_reason,max_initialization_ms=s.max_initialization_ms) for cid,s in self.sources.items()])
 
     def motion(self, camera_ids):
         available = bool(self.motion_at) and time.monotonic()-self.motion_at < 10
@@ -206,6 +212,9 @@ class RelayPool:
             self.cache_bytes -= source.size+len(source.init)
 
     def ingest(self, meta, data):
+        if meta.get('type')=='session':
+            self.session_details={key:meta[key] for key in ('ready','logins','generation','error') if key in meta}
+            return
         if meta.get('type') == 'motion':
             ids = meta.get('camera_ids', [])
             if isinstance(ids,list) and len(ids)<=256 and all(type(cid) is int and 1<=cid<=256 for cid in ids):
@@ -292,6 +301,7 @@ class RelayPool:
             except (OSError, ValueError, KeyError, RuntimeError, asyncio.IncompleteReadError, asyncio.TimeoutError):
                 LOG.warning('media_worker_restart')
             finally:
+                self.session_details={}
                 self.motion_ids, self.motion_at = set(), 0
                 if writer:
                     writer.cancel()
@@ -306,6 +316,7 @@ class RelayPool:
     async def replace(self, config):
         self.motion_ids, self.motion_at = set(), 0
         self.motion_details={}
+        self.session_details={}
         self.device_info = None
         self.config = None
         if self.task:

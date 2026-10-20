@@ -284,11 +284,15 @@ class Transport:
     def command(self, name):
         return {'Name': name, 'SessionID': '0x%08x' % self.session}
 
-    def monitor(self, channel, action, mid):
+    def monitor_command(self, channel, action):
         payload = self.command('OPMonitor')
         payload['OPMonitor'] = {'Action': action, 'Parameter': {
             'Channel': channel, 'CombinMode': 'CONNECT_ALL',
             'StreamType': 'Extra1', 'TransMode': 'TCP'}}
+        return payload
+
+    def monitor(self, channel, action, mid):
+        payload=self.monitor_command(channel,action)
         if action in ('Start', 'Stop'):
             self.send(mid, payload)
             return

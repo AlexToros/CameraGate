@@ -17,6 +17,7 @@ import uuid
 from .audio import AudioClock
 from .connections import ConnectionGate, ControlSlot
 from .motion import MotionMonitor
+from .session import SharedSession, SessionChanged
 from .mp4 import Muxer, parameter_sets, ReorderedStream
 from .vesta import Transport, Frames, discover
 
@@ -48,11 +49,27 @@ class Outbox:
             return packet
 
 
+def reconcile_channels(channels, selected, create):
+    # Stop is recorder-wide for this channel within the shared SessionID.
+    # A replacement must wait until the old thread has sent its final Stop.
+    finished=[]
+    for cid, channel in channels.items():
+        if cid not in selected or selected[cid]!=channel.token:
+            channel.stop.set()
+        if not channel.thread.is_alive():
+            finished.append(cid)
+    for cid in finished:
+        del channels[cid]
+    for cid in selected.keys()-channels.keys():
+        channels[cid]=create(cid,selected[cid])
+
+
 class Channel:
-    def __init__(self, cid, token, hub, config, outbox, connecting, initializing):
+    def __init__(self, cid, token, hub, config, outbox, connecting, initializing, session):
         self.cid, self.hub, self.config = cid, hub, config
         self.token = token
         self.outbox, self.connecting, self.initializing = outbox, connecting, initializing
+        self.session=session
         self.stop = threading.Event()
         self.thread = threading.Thread(target=self.run, daemon=True)
         self.thread.start()
@@ -61,30 +78,32 @@ class Channel:
         delay = 1
         while not self.stop.is_set():
             transport = None
+            monitoring=False
             generation = uuid.uuid4().hex
             base = dict(cid=self.cid, token=self.token, generation=generation)
             stage = 'connect'
             try:
                 self.outbox.put(dict(base, type='status', state='Подключение к камере…'))
-                # Each native session is intrinsically per camera; SDK exposes
-                # no multi-channel monitor call. All share one initialized hub.
+                lease=self.session.wait(self.stop)
+                if lease is None:return
+                # The SDK requires a data socket per channel; authentication
+                # and monitor control belong to the shared recorder session.
                 with self.connecting.slot(self.cid):
                     if self.stop.is_set():
                         return
                     transport = Transport(None, self.config['SERIAL_NUM'], hub=self.hub)
-                    stage = 'login'
-                    info = transport.login(self.config, timeout=5)
+                    transport.session=lease.transport.session
                     stage = 'claim'
                     transport.monitor(self.cid-1, 'Claim', 1413)
-                    transport.monitor(self.cid-1, 'Start', 1410)
+                    self.session.send(lease,1410,transport.monitor_command(self.cid-1,'Start'))
+                    monitoring=True
                 stage = 'media'
                 frames, muxer, audio_clock = Frames(), None, AudioClock()
-                started = media_at = keepalive = time.monotonic()
+                init_reason='connect'
+                started = media_at = time.monotonic()
                 while not self.stop.is_set():
                     now = time.monotonic()
-                    if now - keepalive >= max(2, min(15, info.get('AliveInterval',21)-2)):
-                        transport.send(1006, transport.command('KeepAlive'))
-                        keepalive = now
+                    if not self.session.is_current(lease):raise SessionChanged()
                     if now-media_at > (15 if muxer else 30) or (not muxer and now-started>35):
                         raise TimeoutError('Media timeout')
                     try:
@@ -100,6 +119,7 @@ class Channel:
                         params = parameter_sets(video, codec) if key else ()
                         if muxer and (codec != muxer.codec or fps != muxer.fps or
                                       (params and params != muxer.parameters)):
+                            init_reason='codec' if codec!=muxer.codec else 'fps' if fps!=muxer.fps else 'parameters'
                             muxer = None
                             audio_clock = AudioClock()
                             generation = uuid.uuid4().hex
@@ -108,9 +128,11 @@ class Channel:
                             if not key:
                                 continue
                             stage = 'initialization'
+                            init_at=time.monotonic()
                             with self.initializing:
                                 muxer = Muxer(video, codec, fps)
-                            self.outbox.put(dict(base, type='init', mime=muxer.mime, fps=fps), muxer.init)
+                            self.outbox.put(dict(base, type='init', mime=muxer.mime, fps=fps,
+                                reason=init_reason,initialization_ms=round((time.monotonic()-init_at)*1000)), muxer.init)
                             stage = 'media'
                         fragment = muxer.fragment(video, key)
                         self.outbox.put(dict(base, type='media', key=key,worker_at=time.time(),sdk_gap=transport.max_callback_gap), fragment)
@@ -131,6 +153,9 @@ class Channel:
                     return
             finally:
                 if transport:
+                    if monitoring and self.session.is_current(lease):
+                        try:self.session.send(lease,1410,transport.monitor_command(self.cid-1,'Stop'))
+                        except (ConnectionError,OSError):pass
                     transport.close()
             self.stop.wait(delay)
             delay = min(30, delay*2)
@@ -195,13 +220,17 @@ def main():
             except (ValueError, KeyError, TypeError):
                 stop()
     threading.Thread(target=commands, daemon=True).start()
-    hub = None
+    hub = session = None
     try:
         hub = Transport(discover(), None)
-        monitor = MotionMonitor(hub, config, outbox, stopping, ControlSlot(connecting))
+        session=SharedSession(hub,config,stopping,connecting,outbox)
+        session.start()
+        monitor = MotionMonitor(hub, config, outbox, stopping, ControlSlot(connecting),session=session)
         threading.Thread(target=monitor.run, daemon=True).start()
         offline_since = None
         while not stopping.is_set():
+            if not session.thread.is_alive():
+                raise ConnectionError('Recorder session owner stopped')
             if hub.sdk.vv_nat_get_status() != 1:
                 offline_since = offline_since or time.monotonic()
                 if time.monotonic()-offline_since > 20:
@@ -210,11 +239,8 @@ def main():
                 offline_since = None
             with condition:
                 selected = desired.copy()
-            removed = {cid for cid,c in channels.items() if cid not in selected or selected[cid]!=c.token}
-            for cid in removed:
-                channels.pop(cid).stop.set()
-            for cid in selected.keys() - channels.keys():
-                channels[cid] = Channel(cid, selected[cid], hub, config, outbox, connecting, initializing)
+            reconcile_channels(channels,selected,lambda cid,token:
+                Channel(cid,token,hub,config,outbox,connecting,initializing,session))
             outbox.put(dict(type='heartbeat'))
             with condition:
                 condition.wait(timeout=1)
@@ -227,6 +253,7 @@ def main():
         connecting.close()
         for channel in channels.values():
             channel.stop.set()
+        if session:session.close()
         if hub:
             hub.close()
         os._exit(0)
