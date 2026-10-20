@@ -329,13 +329,18 @@ function connectVideo() {
       }
       return;
     }
-    const view = new DataView(event.data), active = new Set(subscriptions()), tiles = new Map(state.layout.tiles.map(t => [t.id,t])), incoming = new Map();
+    const view = new DataView(event.data), incoming = new Set();
+    let active;
     let offset = 0;
     try {
       while(offset+9<=view.byteLength) {
         const cid=view.getUint32(offset),kind=view.getUint8(offset+4),length=view.getUint32(offset+5);offset+=9;
         if(length>2*1024*1024+65536 || offset+length>view.byteLength)throw new Error("Неверный пакет видео");
-        if(active.has(cid)) {
+        // Audio is consumed synchronously: borrow the packet bytes and leave
+        // the video wall untouched, including on audio-only socket messages.
+        if(kind===4) {
+          if(audioSelection?.cid===cid)cameraAudio.receive(new Uint8Array(event.data,offset,length),mediaStreams.get(cid)?.players.get(audioSelection.element));
+        } else if((active ??= new Set(subscriptions())).has(cid)) {
           const data=new Uint8Array(event.data.slice(offset,offset+length));
           if(kind===1) {
             const size=new DataView(data.buffer).getUint16(0);if(size>256 || size+2>=data.length)throw new Error("Неверный формат видео");
@@ -343,13 +348,15 @@ function connectVideo() {
             const mime=new TextDecoder().decode(data.subarray(2,2+size));mediaStreams.get(cid)?.destroy();
             mediaStreams.set(cid,new CameraStream(mime,data.slice(2+size),ratio=>cameraRatios.set(cid,ratio)));
           } else if(kind===2 || kind===3)mediaStreams.get(cid)?.receive(kind,data);
-          else if(kind===4 && audioSelection?.cid===cid)cameraAudio.receive(data,mediaStreams.get(cid)?.players.get(audioSelection.element));
-          incoming.set(cid,true);
+          if(kind>=1 && kind<=3)incoming.add(cid);
         }
         offset+=length;
       }
     } catch { ws.close();return; }
-    document.querySelectorAll(".tile").forEach(element => { const tile = tiles.get(element.dataset.tile); if(incoming.has(tile?.camera_id)) drawCached(tile,element); });
+    if(incoming.size) {
+      const tiles = new Map(state.layout.tiles.map(t => [t.id,t]));
+      document.querySelectorAll(".tile").forEach(element => { const tile = tiles.get(element.dataset.tile); if(incoming.has(tile?.camera_id)) drawCached(tile,element); });
+    }
   };
   ws.onclose = event => { if(epoch !== socketEpoch) return;stopCameraAudio(); document.querySelectorAll(".tile").forEach(clearTile); if(event.code === 4401) signedOut("Сессия завершена. Войдите снова"); else if(event.code === 4403) { toast("Права доступа изменились"); refresh().then(() => { reconnectTimer = setTimeout(connectVideo,1500); }); } else reconnectTimer = setTimeout(connectVideo,2000); };
 }

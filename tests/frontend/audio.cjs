@@ -12,7 +12,8 @@ const packet=(stamp,values=[0xd5,0x55,0])=>{const data=new Uint8Array(10+values.
 (async()=>{
  const audio=new scope.window.CameraAudio(),video=new EventTarget();Object.assign(video,{paused:false,readyState:4,currentTime:5});
  const player={video,offset:-10,closed:false,element:{classList:{contains:()=>true}}};
- await audio.start(video);audio.receive(packet(15.05),player);assert.equal(audio.samples,3);assert.equal(contexts,1);
+ await audio.start(video);assert.equal(audio.context.gains.length,0);
+ audio.receive(packet(15.05),player);assert.equal(audio.samples,3);assert.equal(contexts,1);
  const ctx=audio.context,first=ctx.sources[0];assert.ok(Math.abs(first.at-100.05)<.0001);assert.equal(first.buffer.rate,8000);
  assert.deepEqual([...first.buffer.pcm],[8/32768,-8/32768,-5504/32768]);
  audio.receive(packet(40),player);audio.receive(packet(10),player);assert.equal(ctx.sources.length,1);
@@ -20,8 +21,12 @@ const packet=(stamp,values=[0xd5,0x55,0])=>{const data=new Uint8Array(10+values.
  await audio.start(video);assert.equal(contexts,1);audio.receive(packet(15.05),player);assert.equal(audio.samples,3);
  const second=ctx.sources.at(-1);audio.stop();assert.equal(second.gain.connected,false);assert.equal(ctx.state,'suspended');
  audio.receive(packet(15.05),player);assert.equal(ctx.sources.length,2);
- await audio.start(video);player.video.paused=true;audio.receive(packet(15.05),player);assert.equal(ctx.sources.length,2);
+ await audio.start(video);player.video.paused=true;
+ const gains=ctx.gains.length;
+ for(let i=0;i<100;i++)audio.receive(packet(15.05),player);
+ assert.equal(ctx.sources.length,2);assert.equal(ctx.gains.length,gains);
  player.video.paused=false;
+ audio.receive(packet(16.2),player);assert.equal(ctx.sources.length,3);assert.ok(Math.abs(ctx.sources.at(-1).at-101.2)<.0001);
  let error;audio.onError=value=>error=value;ctx.createBuffer=()=>{throw new Error('unsupported');};
  audio.receive(packet(15.05),player);assert.equal(audio.enabled,false);assert.equal(error,'Не удалось воспроизвести звук');
  audio.close();assert.equal(ctx.state,'closed');assert.equal(audio.context,null);

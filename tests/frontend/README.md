@@ -19,6 +19,7 @@ node tests/frontend/navigation.cjs
 node tests/frontend/connection.cjs
 node tests/frontend/actions.cjs
 node tests/frontend/audio.cjs
+node tests/frontend/audio-routing.cjs
 node tests/frontend/audio-ui.cjs
 ```
 
