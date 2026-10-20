@@ -132,12 +132,32 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(recorder.search_calls,[(1,'2026-10-20',None)])
         ws=await self.client.ws_connect('/api/admin/archive/play')
         await ws.send_json(dict(csrf='wrong',id=record['id']))
-        self.assertEqual((await ws.receive_json())['type'],'error')
+        invalid=await ws.receive_json()
+        self.assertEqual(invalid['type'],'error');self.assertFalse(invalid['retryable'])
         await ws.close();self.assertEqual(recorder.play_calls,[])
         ws=await self.client.ws_connect('/api/admin/archive/play')
         await ws.send_json(dict(csrf=self.me['csrf'],id='/private/channel-record.h264'))
         self.assertEqual((await ws.receive_json())['type'],'error')
         await ws.close();self.assertEqual(recorder.play_calls,[])
+
+    async def test_archive_transient_errors_retry_but_recorder_denial_is_terminal(self):
+        class FailingRecorder(FakeRecorder):
+            code='unavailable'
+            async def records(self,config,request):
+                yield dict(type='error',code=self.code),b''
+        recorder=self.app[PORTAL].archive.recorder=FailingRecorder()
+        self.streams.config={'test':True}
+        response=await self.client.post('/api/admin/archive/search',headers=self.headers,json=dict(camera_id=1,date='2026-10-20'))
+        record=(await response.json())['records'][0]
+        ws=await self.client.ws_connect('/api/admin/archive/play')
+        await ws.send_json(dict(csrf=self.me['csrf'],id=record['id']))
+        self.assertTrue((await ws.receive_json(timeout=3))['retryable'])
+        await ws.close()
+        recorder.code='denied'
+        ws=await self.client.ws_connect('/api/admin/archive/play')
+        await ws.send_json(dict(csrf=self.me['csrf'],id=record['id']))
+        self.assertFalse((await ws.receive_json(timeout=3))['retryable'])
+        await ws.close()
 
     async def test_archive_stream_revokes_role_and_cleans_up_native_reader(self):
         archive=self.app[PORTAL].archive;recorder=archive.recorder=FakeRecorder()

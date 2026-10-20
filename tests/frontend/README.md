@@ -22,6 +22,7 @@ node tests/frontend/audio.cjs
 node tests/frontend/audio-routing.cjs
 node tests/frontend/audio-ui.cjs
 node tests/frontend/archive-motion.cjs
+node tests/frontend/archive-retry.cjs
 node tests/frontend/reorder.cjs
 node tests/frontend/buffering.cjs
 node tests/frontend/player-startup.cjs

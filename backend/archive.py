@@ -31,7 +31,7 @@ def search_input(data, cameras):
 
 def recorder_error(meta):
     return Problem('У учётной записи регистратора нет доступа к архиву' if meta.get('code')=='denied'
-        else 'Не удалось получить архив регистратора. Повторите попытку',503)
+        else 'Не удалось получить архив регистратора. Повторите попытку',403 if meta.get('code')=='denied' else 503)
 
 
 class Archive:
@@ -140,10 +140,10 @@ class Archive:
                     reading=asyncio.create_task(anext(iterator))
         except Problem as error:
             if not ws.closed:
-                await ws.send_json(dict(type='error',error=str(error)))
+                await ws.send_json(dict(type='error',error=str(error),retryable=error.status in (429,503)))
         except (StopAsyncIteration,ValueError,TypeError,KeyError,OSError,RuntimeError,asyncio.TimeoutError):
             if not ws.closed:
-                await ws.send_json(dict(type='error',error='Не удалось воспроизвести запись. Повторите попытку'))
+                await ws.send_json(dict(type='error',error='Не удалось воспроизвести запись. Повторите попытку',retryable=True))
         finally:
             for task in (reading,receiving):
                 if task:

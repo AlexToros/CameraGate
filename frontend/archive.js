@@ -7,28 +7,30 @@ class ArchivePlayer {
     this.container=container;this.record=record;this.onStatus=onStatus;
     this.video=container.querySelector('video');this.slider=container.querySelector('[data-position]');
     this.button=container.querySelector('[data-play]');this.clock=container.querySelector('[data-clock]');
-    this.events=new AbortController();this.epoch=0;this.position=0;this.offset=0;this.closed=false;
+    this.events=new AbortController();this.epoch=0;this.position=0;this.offset=0;this.closed=false;this.retryCount=0;
     this.slider.max=String(Math.max(1,record.duration));this.slider.value='0';
     this.button.onclick=()=>this.running ? this.pause() : this.start(this.position);
     this.slider.onchange=()=>this.start(+this.slider.value);
     const options={signal:this.events.signal};
     this.video.addEventListener('timeupdate',()=>this.updatePosition(),options);
-    this.video.addEventListener('playing',()=>this.onStatus(''),options);
-    this.video.addEventListener('waiting',()=>{if(this.running)this.onStatus('Загрузка записи…');},options);
-    this.video.addEventListener('error',()=>this.fail('Браузер не смог воспроизвести запись'),options);
-    this.video.addEventListener('ended',()=>{this.pause();this.onStatus('Запись закончилась');},options);
+    this.video.addEventListener('playing',()=>{if(this.running && !this.retryTimer)this.onStatus('');},options);
+    this.video.addEventListener('waiting',()=>{if(this.running && !this.retryTimer)this.onStatus('Загрузка записи…');},options);
+    this.video.addEventListener('error',()=>this.retry(),options);
+    this.video.addEventListener('ended',()=>{if(this.retryTimer || !this.running)return;if(this.done){this.pause();this.onStatus('Запись закончилась');}else this.retry();},options);
     container.querySelector('[data-fullscreen]').onclick=()=>{
       if(this.video.requestFullscreen)this.video.requestFullscreen().catch(()=>{});
       else if(this.video.webkitEnterFullscreen)this.video.webkitEnterFullscreen();
     };
   }
   updatePosition() {
+    if(this.running && !this.retryTimer && this.video.currentTime>=1)this.retryCount=0;
     this.position=Math.min(this.record.duration,this.offset+this.video.currentTime);
     this.slider.value=String(this.position);
     const base=new Date(this.record.start.replace(' ','T'));base.setSeconds(base.getSeconds()+Math.floor(this.position));
     this.clock.textContent=base.toLocaleTimeString('ru-RU');
   }
   release() {
+    clearTimeout(this.retryTimer);this.retryTimer=null;
     this.epoch++;this.ws?.close();this.ws=null;
     this.queue=[];this.bytes=0;this.head=0;
   }
@@ -36,8 +38,9 @@ class ArchivePlayer {
     this.updatePosition();this.running=false;this.release();this.video.pause();
     this.button.textContent='Смотреть';this.onStatus('Пауза');
   }
-  start(position=0) {
+  start(position=0,retrying=false) {
     if(this.closed)return;
+    if(!retrying)this.retryCount=0;
     this.release();const epoch=this.epoch;
     this.running=true;this.done=false;this.playPending=false;this.position=this.offset=Math.floor(Math.min(position,Math.max(0,this.record.duration-1)));
     this.media=null;this.buffer=null;
@@ -51,7 +54,7 @@ class ArchivePlayer {
       if(epoch!==this.epoch || this.closed)return;
       if(typeof event.data==='string') {
         const message=JSON.parse(event.data);
-        if(message.type==='error'){this.fail(message.error);return;}
+        if(message.type==='error'){if(message.retryable===false)this.fail(message.error);else this.retry();return;}
         if(message.type==='end'){this.done=true;this.pump();return;}
         if(message.type==='init') {
           this.offset=message.offset ?? this.offset;
@@ -62,26 +65,37 @@ class ArchivePlayer {
             if(epoch!==this.epoch)return;
             try {
               this.buffer=this.media.addSourceBuffer(message.mime);
-              this.buffer.addEventListener('updateend',()=>this.pump());
-              this.buffer.addEventListener('error',()=>this.fail('Не удалось воспроизвести запись'));
+              this.buffer.addEventListener('updateend',()=>{if(epoch===this.epoch)this.pump();});
+              this.buffer.addEventListener('error',()=>{if(epoch===this.epoch)this.retry();});
               this.pump();
-            } catch {this.fail('Не удалось открыть запись');}
+            } catch {this.retry();}
           },{once:true});
         }
       } else {
         this.bytes+=event.data.byteLength;
-        if(this.bytes>8*1024*1024){this.fail('Соединение не успевает за записью. Повторите просмотр');return;}
+        if(this.bytes>8*1024*1024){this.retry();return;}
         this.queue.push(event.data);this.pump();
       }
     };
-    ws.onclose=()=>{if(epoch===this.epoch && this.running && !this.done)this.fail('Связь с архивом прервалась. Нажмите «Смотреть»');};
+    ws.onclose=ws.onerror=()=>{if(epoch===this.epoch && this.running && !this.done)this.retry();};
+  }
+  retry() {
+    if(this.closed || !this.running || this.retryTimer)return;
+    this.updatePosition();const position=this.position;
+    this.release();this.video.pause();
+    const epoch=this.epoch,delay=Math.min(15000,1000*2**Math.min(this.retryCount++,4));
+    this.onStatus('Восстанавливаем запись…');
+    this.retryTimer=setTimeout(()=>{
+      this.retryTimer=null;
+      if(!this.closed && this.running && epoch===this.epoch)this.start(position,true);
+    },delay);
   }
   pump() {
-    if(!this.running || !this.buffer || this.buffer.updating || this.media.readyState!=='open')return;
+    if(!this.running || this.retryTimer || !this.buffer || this.buffer.updating || this.media.readyState!=='open')return;
     try {
       const ranges=this.buffer.buffered;
       if(ranges.length) {
-        if(ranges.end(ranges.length-1)-this.video.currentTime>30){this.fail('Просмотр отстал от записи. Нажмите «Смотреть»');return;}
+        if(ranges.end(ranges.length-1)-this.video.currentTime>30){this.retry();return;}
         if(this.video.currentTime-ranges.start(0)>15){this.buffer.remove(ranges.start(0),this.video.currentTime-10);return;}
         if(this.video.paused && !this.playPending) {
           this.playPending=true;const epoch=this.epoch;
@@ -94,7 +108,7 @@ class ArchivePlayer {
         else if(this.head>=64 && this.head*2>=this.queue.length){this.queue=this.queue.slice(this.head);this.head=0;}
         this.buffer.appendBuffer(data);
       } else if(this.done)this.media.endOfStream();
-    } catch {this.fail('Не удалось воспроизвести запись');}
+    } catch {this.retry();}
   }
   fail(message) {if(this.closed)return;this.pause();this.onStatus(message);}
   close() {

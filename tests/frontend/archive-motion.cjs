@@ -4,10 +4,11 @@ const temp=fs.mkdtempSync(path.join(os.tmpdir(),'cameragate-archive-ui-'));
 const sample=path.join(temp,'sample.mp4');
 execFileSync(process.env.FFMPEG_BINARY || 'ffmpeg',['-hide_banner','-loglevel','error','-f','lavfi','-i','testsrc=size=160x120:rate=10','-t','4','-c:v','libx264','-bf','0','-threads','1','-pix_fmt','yuv420p','-movflags','empty_moov+default_base_moof+frag_keyframe','-y',sample]);
 (async()=>{const browser=await chromium.launch({headless:true,executablePath:process.env.CHROME_EXECUTABLE});try{
- const page=await browser.newPage({...devices['iPhone X']}),errors=[],plays=[];let live,closed=0,searches=0,releaseSearch;
+ const page=await browser.newPage({...devices['iPhone X']}),errors=[],plays=[],archiveSockets=[];let live,closed=0,searches=0,releaseSearch;
  page.on('pageerror',e=>errors.push(e.message));
  await page.routeWebSocket('**/api/live',socket=>{live=socket;socket.onMessage(()=>{});});
  await page.routeWebSocket('**/api/admin/archive/play',socket=>{
+   archiveSockets.push(socket);
    socket.onClose(()=>closed++);
    socket.onMessage(value=>{
      plays.push(JSON.parse(value));
@@ -37,13 +38,22 @@ execFileSync(process.env.FFMPEG_BINARY || 'ffmpeg',['-hide_banner','-loglevel','
  await page.locator('.archive-record').first().click();await page.locator('.archive-view video').waitFor();await page.waitForTimeout(1000);
  const playback=await page.locator('.archive-view video').evaluate(video=>({width:video.videoWidth,time:video.currentTime,paused:video.paused,error:video.error?.message}));
  assert.ok(playback.width>0 && playback.time>0,JSON.stringify({playback,status:await page.locator('.archive-status').textContent(),errors}));
+ const reconnectAt=plays.length;
+ archiveSockets.at(-1).close({code:1011,reason:'test disconnect'});
+ await page.getByText('Восстанавливаем запись…',{exact:true}).waitFor();
+ assert.equal(await page.locator('[data-play]').textContent(),'Пауза');
+ await page.waitForTimeout(1500);assert.equal(plays.length,reconnectAt+1);
+ assert.ok(plays.at(-1).offset>=Math.floor(playback.time));
  await page.locator('[data-play]').click();assert.equal(await page.locator('.archive-status').textContent(),'Пауза');
  await page.locator('[data-position]').fill('30');await page.locator('[data-position]').dispatchEvent('change');await page.waitForTimeout(250);
  assert.equal(plays.at(-1).offset,30);assert.ok(closed>=1);
+ archiveSockets.at(-1).close({code:1011,reason:'test cancellation'});
+ await page.getByText('Восстанавливаем запись…',{exact:true}).waitFor();
+ const beforeCancel=plays.length;await page.locator('[data-play]').click();await page.waitForTimeout(1500);assert.equal(plays.length,beforeCancel);
  for(const width of [320,390,768,1440]){
    await page.setViewportSize({width,height:900});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth),width);
  }
  if(process.env.UI_SCREENSHOTS_DIR){fs.mkdirSync(process.env.UI_SCREENSHOTS_DIR,{recursive:true});await page.setViewportSize({width:390,height:844});await page.screenshot({path:path.join(process.env.UI_SCREENSHOTS_DIR,'archive-mobile.png')});}
  await page.getByRole('button',{name:'Прямой эфир',exact:true}).click();await page.locator('#wall').waitFor();assert.equal(await page.evaluate(()=>archiveViewer),null);
- assert.deepEqual(errors,[]);console.log('PASS motion start/unavailable; admin archive search/paging/dedup; actual synthetic MSE playback; pause, seek, cleanup and widths320/390/768/1440');
+ assert.deepEqual(errors,[]);console.log('PASS motion start/unavailable; admin archive search/paging/dedup; synthetic MSE playback, automatic reconnect, pause cancellation, seek, cleanup and widths320/390/768/1440');
 }finally{await browser.close();fs.rmSync(temp,{recursive:true,force:true});}})().catch(error=>{console.error(error);fs.rmSync(temp,{recursive:true,force:true});process.exitCode=1;});
