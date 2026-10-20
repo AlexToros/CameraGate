@@ -12,17 +12,36 @@
     async start(video){
       const Context=window.AudioContext || window.webkitAudioContext;
       if(!Context)throw new Error("Браузер не поддерживает звук камер");
-      this.binding?.abort();this.binding=new AbortController();
       this.enabled=true;this.packets=this.samples=0;
       if(!this.context || this.context.state==="closed")this.context=new Context({latencyHint:"interactive"});
-      this.reset();const epoch=++this.epoch;
+      this.bindVideo(video);const epoch=++this.epoch;
+      this.prepareOutput();
+      // Both calls must stay in the button's user-activation call stack.
+      const resumed=this.context.resume(),playing=this.output?.element.play();
+      await Promise.all([resumed,playing]);
+      if(epoch!==this.epoch)return;
+      if(this.context.state!=="running")throw new Error("Не удалось включить звук. Нажмите ещё раз");
+    }
+    bindVideo(video){
+      this.binding?.abort();this.binding=new AbortController();this.reset();
       const reset=()=>this.reset();
       video.addEventListener("pause",reset,{signal:this.binding.signal});
       video.addEventListener("waiting",reset,{signal:this.binding.signal});
       video.addEventListener("seeking",reset,{signal:this.binding.signal});
-      await this.context.resume();
-      if(epoch!==this.epoch)return;
-      if(this.context.state!=="running")throw new Error("Не удалось включить звук. Нажмите ещё раз");
+    }
+    prepareOutput(){
+      const nav=window.navigator;
+      if(nav?.audioSession){
+        try {nav.audioSession.type="playback";this.session=nav.audioSession;return;}catch {/* Older WebKit needs a media-element output. */}
+      }
+      const ios=/iPhone|iPad|iPod/.test(nav?.userAgent || "") || (nav?.platform==="MacIntel" && nav.maxTouchPoints>1);
+      if(!ios || this.output)return;
+      // iOS <=16 routes direct Web Audio through the ringer category. Send
+      // the actual PCM to one media element instead; no silent loop or fetch.
+      const node=this.context.createMediaStreamDestination(),element=document.createElement("audio");
+      element.hidden=true;element.autoplay=true;element.controls=false;element.playsInline=true;
+      element.srcObject=node.stream;document.body.append(element);
+      this.output={node,element};
     }
     reset(){
       if(this.gain){this.gain.gain.setValueAtTime(0,this.context.currentTime);this.gain.disconnect();this.gain=null;}
@@ -43,14 +62,28 @@
       if(this.nextAt!==null && Math.abs(desired-this.nextAt)>.15)this.reset();
       const start=this.nextAt===null ? desired : Math.max(now+.01,this.nextAt);
       if(start>now+MAX_LEAD+.05)return;
-      if(!this.gain){this.gain=ctx.createGain();this.gain.connect(ctx.destination);}
+      if(!this.gain){this.gain=ctx.createGain();this.gain.connect(this.output?.node || ctx.destination);}
       const input=data.subarray(10),buffer=ctx.createBuffer(1,input.length,RATE),pcm=buffer.getChannelData(0);
       for(let i=0;i<input.length;i++)pcm[i]=alaw[input[i]];
       const source=ctx.createBufferSource();source.buffer=buffer;source.connect(this.gain);source.onended=()=>source.disconnect();source.start(start);
       this.nextAt=start+input.length/RATE;this.samples+=input.length;
     }
-    stop(){this.epoch++;this.enabled=false;this.binding?.abort();this.reset();if(this.context?.state==="running")this.context.suspend().catch(()=>{});}
-    close(){this.stop();const ctx=this.context;this.context=null;if(ctx && ctx.state!=="closed")ctx.close().catch(()=>{});}
+    stop(){
+      this.epoch++;this.enabled=false;this.binding?.abort();this.reset();
+      this.output?.element.pause();
+      if(this.session?.type==="playback"){try{this.session.type="auto";}catch{}}
+      if(this.context?.state==="running")this.context.suspend().catch(()=>{});
+    }
+    close(){
+      this.stop();
+      if(this.output){
+        const {node,element}=this.output;
+        element.srcObject=null;element.remove();node.stream.getAudioTracks()[0]?.stop();node.disconnect();
+        this.output=null;
+      }
+      const ctx=this.context;this.context=null;
+      if(ctx && ctx.state!=="closed")ctx.close().catch(()=>{});
+    }
   }
   window.CameraAudio=CameraAudio;
 })();

@@ -192,7 +192,8 @@ function gridOptions() {
 function renderTiles() {
   const wall = document.querySelector("#wall"); if(!wall) return;
   stopWallReorder();
-  stopCameraAudio();
+  const audible=audioSelection && (state.layout.tiles.find(tile=>tile.id===audioSelection.tileId && tile.camera_id===audioSelection.cid) || state.layout.tiles.find(tile=>tile.camera_id===audioSelection.cid));
+  if(audioSelection && !audible)stopCameraAudio();
   tileObserver?.disconnect();
   for(const stream of mediaStreams.values())stream.releasePlayers();
   const columns = Math.min(state.layout.columns,Math.max(1,Math.floor((wall.clientWidth-16)/150)));
@@ -212,6 +213,7 @@ function renderTiles() {
   });
   wall.querySelectorAll(".tile").forEach(element => {
     const tile = tilesById.get(element.dataset.tile);
+    if(audible?.id===tile.id){Object.assign(audioSelection,{tileId:tile.id,element});cameraAudio.bindVideo(element.querySelector('video'));}
     element.style.setProperty("--width",Math.min(tile.width,columns));
     element.style.setProperty("--ratio",cameraRatios.get(tile.camera_id) || 16/9);
     element.querySelector(".camera-trigger").onclick = () => chooseCamera(tile);
@@ -223,6 +225,7 @@ function renderTiles() {
     tileObserver.observe(element);
     drawCached(tile,element);
   });
+  audioButtons();
   stopWallReorder=enableWallReorder(wall,ids=>{
     state.layout.tiles=ids.map(id=>tilesById.get(id));
     const nodes=new Map([...wall.querySelectorAll('.tile')].map(element=>[element.dataset.tile,element]));

@@ -3,7 +3,7 @@ let contexts=0;
 class Context {
  constructor(){contexts++;this.state='suspended';this.currentTime=100;this.destination={};this.sources=[];this.gains=[];}
  resume(){this.state='running';return Promise.resolve();}suspend(){this.state='suspended';return Promise.resolve();}close(){this.state='closed';return Promise.resolve();}
- createGain(){const g={gain:{setValueAtTime(value){g.level=value;}},connect(){g.connected=true;},disconnect(){g.connected=false;}};this.gains.push(g);return g;}
+ createGain(){const g={gain:{setValueAtTime(value){g.level=value;}},connect(target){g.connected=true;g.target=target;},disconnect(){g.connected=false;}};this.gains.push(g);return g;}
  createBuffer(channels,length,rate){const pcm=new Float32Array(length);return {getChannelData:()=>pcm,pcm,rate};}
  createBufferSource(){const s={connect(g){s.gain=g;},disconnect(){s.disconnected=true;},start(at){s.at=at;}};this.sources.push(s);return s;}
 }
@@ -30,5 +30,35 @@ const packet=(stamp,values=[0xd5,0x55,0])=>{const data=new Uint8Array(10+values.
  let error;audio.onError=value=>error=value;ctx.createBuffer=()=>{throw new Error('unsupported');};
  audio.receive(packet(15.05),player);assert.equal(audio.enabled,false);assert.equal(error,'Не удалось воспроизвести звук');
  audio.close();assert.equal(ctx.state,'closed');assert.equal(audio.context,null);
+ // Modern iOS uses the playback category without another media element.
+ scope.window.navigator={userAgent:'iPhone',audioSession:{type:'auto'}};
+ const modern=new scope.window.CameraAudio();await modern.start(video);
+ assert.equal(scope.window.navigator.audioSession.type,'playback');assert.equal(modern.output,undefined);
+ modern.receive(packet(15.05),player);assert.equal(modern.context.gains[0].target,modern.context.destination);
+ modern.stop();assert.equal(scope.window.navigator.audioSession.type,'auto');modern.close();
+ // iPhone X / iOS 16: real PCM goes through one media element. Both
+ // activation calls happen before either promise resolves; no silent loop.
+ const calls=[],elements=[];let resume,play;
+ class LegacyContext extends Context {
+  resume(){calls.push('resume');this.state='running';return new Promise(resolve=>resume=resolve);}
+  createMediaStreamDestination(){return {stream:{getAudioTracks:()=>[{stop(){calls.push('track-stop');}}]},disconnect(){calls.push('disconnect');}};}
+ }
+ scope.window.AudioContext=LegacyContext;scope.window.navigator={userAgent:'iPhone'};
+ scope.document={body:{append(el){elements.push(el);}},createElement(tag){assert.equal(tag,'audio');return {
+  play(){calls.push('play');return new Promise(resolve=>play=resolve);},pause(){calls.push('pause');},remove(){elements.splice(elements.indexOf(this),1);}
+ };}};
+ const legacy=new scope.window.CameraAudio(),starting=legacy.start(video);
+ assert.deepEqual(calls,['resume','play']);assert.equal(elements.length,1);assert.equal(elements[0].srcObject,legacy.output.node.stream);
+ resume();play();await starting;legacy.receive(packet(15.05),player);
+ assert.equal(legacy.context.gains[0].target,legacy.output.node);
+ const oldGain=legacy.context.gains[0],newVideo=new EventTarget();legacy.bindVideo(newVideo);
+ assert.equal(oldGain.connected,false);assert.equal(legacy.enabled,true);assert.equal(legacy.context.state,'running');
+ legacy.receive(packet(15.05),player);const currentGain=legacy.context.gains.at(-1);
+ video.dispatchEvent(new Event('waiting'));assert.equal(currentGain.connected,true);
+ newVideo.dispatchEvent(new Event('waiting'));assert.equal(currentGain.connected,false);
+ legacy.stop();assert.equal(elements.length,1);assert.equal(legacy.context.state,'suspended');
+ const restarting=legacy.start(newVideo);resume();play();await restarting;assert.equal(elements.length,1);
+ legacy.close();assert.equal(elements.length,0);assert.ok(calls.includes('track-stop'));assert.ok(calls.includes('disconnect'));
  console.log('PASS A-law golden samples, selected source isolation, sync bounds, flush on waiting/switch/stop, context reuse and close');
+ console.log('PASS modern iOS playback category, legacy iOS media output, synchronous activation, tile rebinding and output cleanup');
 })().catch(e=>{console.error(e);process.exitCode=1;});
