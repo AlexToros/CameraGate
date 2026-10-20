@@ -14,6 +14,7 @@ import threading
 import time
 import uuid
 
+from .audio import AudioClock
 from .mp4 import Muxer, parameter_sets, ReorderedStream
 from .vesta import Transport, Frames, discover
 
@@ -24,11 +25,13 @@ class Outbox:
         self.condition = threading.Condition()
         self.items = deque()
 
-    def put(self, meta, data=b''):
+    def put(self, meta, data=b'', timeout=2):
         header = json.dumps(meta, separators=(',', ':'), ensure_ascii=False).encode()
         packet = struct.pack('<II', len(header), len(data)) + header + data
         with self.condition:
-            if not self.condition.wait_for(lambda: self.size+len(packet)<=self.limit, timeout=2):
+            if not self.condition.wait_for(lambda: self.size+len(packet)<=self.limit, timeout=timeout):
+                if timeout == 0:
+                    return False
                 raise TimeoutError('IPC backpressure')
             self.items.append(packet)
             self.size += len(packet)
@@ -73,7 +76,7 @@ class Channel:
                     transport.monitor(self.cid-1, 'Claim', 1413)
                     transport.monitor(self.cid-1, 'Start', 1410)
                 stage = 'media'
-                frames, muxer = Frames(), None
+                frames, muxer, audio_clock = Frames(), None, AudioClock()
                 started = media_at = keepalive = time.monotonic()
                 while not self.stop.is_set():
                     now = time.monotonic()
@@ -89,12 +92,14 @@ class Channel:
                     if fields[-2] != 1412:
                         continue
                     # Parse a bulk packet before processing its access units.
-                    units = frames.feed_units(body)
+                    audio = []
+                    units = frames.feed_units(body, audio)
                     for video, key, codec, fps in units:
                         params = parameter_sets(video, codec) if key else ()
                         if muxer and (codec != muxer.codec or fps != muxer.fps or
                                       (params and params != muxer.parameters)):
                             muxer = None
+                            audio_clock = AudioClock()
                             generation = uuid.uuid4().hex
                             base = dict(cid=self.cid, token=self.token, generation=generation)
                         if muxer is None:
@@ -109,6 +114,10 @@ class Channel:
                         self.outbox.put(dict(base, type='media', key=key), fragment)
                         media_at = time.monotonic()
                         delay = 1
+                    if muxer and audio:
+                        encoded = audio_clock.batch(audio, muxer.timestamp/90000)
+                        if encoded:
+                            self.outbox.put(dict(base, type='audio'), encoded, timeout=0)
             except Exception as error:
                 # No exception text, native payload, credentials or endpoint IDs.
                 try:

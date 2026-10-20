@@ -3,6 +3,9 @@ const root = document.querySelector("#app"), modal = document.querySelector("#mo
 const h = value => String(value ?? "").replace(/[&<>"\x27]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","\x27":"&#39;"}[c]));
 let me, csrf, state, page = "wall", socket, socketEpoch = 0, saveTimer, saving = Promise.resolve(), refreshTimer, installPrompt, reconnectTimer;
 const mediaStreams = new Map();
+const cameraAudio = new CameraAudio();
+let audioSelection = null;
+cameraAudio.onError=message=>{stopCameraAudio();subscribe();toast(message);};
 const cameraRatios = new Map();
 let tileObserver, cameraFullscreen = null;
 let dragged;
@@ -34,7 +37,7 @@ function bindForm(form, submit) {
 }
 function dialog(title, body, kind="sheet") { modal.className=`dialog-${kind}`;modal.setAttribute("aria-label",title); modal.innerHTML = `<header class="dialog-head"><h2>${h(title)}</h2><button class="close icon-button" aria-label="Закрыть">×</button></header><div class="dialog-content">${body}</div>`; if(kind==="picker")modal.querySelector(".dialog-head").append(modal.querySelector(".camera-filters"));modal.querySelector(".close").onclick = () => modal.close(); modal.showModal(); }
 modal.addEventListener("click", event => { if (event.target === modal) { const rect = modal.getBoundingClientRect(); if(event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) modal.close(); } });
-function stopVideo() { clearTimeout(reconnectTimer);socketEpoch++;if(socket)socket.close();socket=null;if(cameraFullscreen){cameraFullscreen.classList.remove("video-expanded");if(document.fullscreenElement===cameraFullscreen)document.exitFullscreen().catch(()=>{});cameraFullscreen=null;}for(const stream of mediaStreams.values())stream.destroy();mediaStreams.clear(); }
+function stopVideo() { stopCameraAudio(true);clearTimeout(reconnectTimer);socketEpoch++;if(socket)socket.close();socket=null;if(cameraFullscreen){cameraFullscreen.classList.remove("video-expanded");if(document.fullscreenElement===cameraFullscreen)document.exitFullscreen().catch(()=>{});cameraFullscreen=null;}for(const stream of mediaStreams.values())stream.destroy();mediaStreams.clear(); }
 function signedOut(message) { toggleAdminMenu(false);adminDraft=null;finishAdminPicker();root.classList.remove("editing");routeEpoch++; tileObserver?.disconnect(); me = null; csrf = null; state = null; clearInterval(refreshTimer); clearTimeout(saveTimer); stopVideo(); if(modal.open) modal.close(); authView("login", null, message); }
 function authView(mode, invitation, message = "") {
   const setup = mode === "setup", invite = mode === "invite";
@@ -129,6 +132,8 @@ async function locationChanged() {
   render();window.scrollTo(0,0);
 }
 const icons = {
+  sound: '<path d="M11 5 6 9H3v6h3l5 4zM15 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/>',
+  silent: '<path d="M11 5 6 9H3v6h3l5 4zM16 9l5 6m0-6-5 6"/>',
   copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4H4v12h4"/>',
   check: '<path d="m5 12 4 4L19 6"/>',
   menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
@@ -177,6 +182,7 @@ function gridOptions() {
 }
 function renderTiles() {
   const wall = document.querySelector("#wall"); if(!wall) return;
+  stopCameraAudio();
   tileObserver?.disconnect();
   for(const stream of mediaStreams.values())stream.releasePlayers();
   const columns = Math.min(state.layout.columns,Math.max(1,Math.floor((wall.clientWidth-16)/150)));
@@ -184,7 +190,7 @@ function renderTiles() {
   const cameras = new Map(state.cameras.map(c => [c.id,c]));
   wall.innerHTML = state.layout.tiles.length ? state.layout.tiles.map((tile,index) => {
     const name = cameras.get(tile.camera_id)?.name || `Экран ${index+1}`;
-    return `<article class="tile" data-tile="${h(tile.id)}" aria-label="Экран ${index+1}"><div class="tile-head" draggable="true"><span class="status-dot" aria-hidden="true"></span><button class="camera-trigger" aria-label="Камера экрана ${index+1}: ${h(name)}" title="${h(name)}">${h(name)}${icon("down")}</button><button class="tile-menu icon-button" title="Настройки экрана" aria-label="Настройки экрана ${index+1}">${icon("more")}</button></div><div class="picture"><video muted autoplay playsinline webkit-playsinline disableRemotePlayback preload="auto"></video><canvas class="last-frame" hidden aria-hidden="true"></canvas><span class="stream-state">${tile.camera_id ? "Подключение…" : ""}</span>${!tile.camera_id ? `<button class="empty-camera">${icon("plus")}<span>Камера</span></button>` : ""}<button ${tile.camera_id ? "" : "hidden"} class="tile-expand icon-button" title="На весь экран" aria-label="На весь экран: камера ${index+1}">${icon("expand")}</button></div></article>`;
+    return `<article class="tile" data-tile="${h(tile.id)}" aria-label="Экран ${index+1}"><div class="tile-head" draggable="true"><span class="status-dot" aria-hidden="true"></span><button class="camera-trigger" aria-label="Камера экрана ${index+1}: ${h(name)}" title="${h(name)}">${h(name)}${icon("down")}</button><button class="tile-menu icon-button" title="Настройки экрана" aria-label="Настройки экрана ${index+1}">${icon("more")}</button></div><div class="picture"><video muted autoplay playsinline webkit-playsinline disableRemotePlayback preload="auto"></video><canvas class="last-frame" hidden aria-hidden="true"></canvas><span class="stream-state">${tile.camera_id ? "Подключение…" : ""}</span>${!tile.camera_id ? `<button class="empty-camera">${icon("plus")}<span>Камера</span></button>` : ""}<button ${tile.camera_id ? "" : "hidden"} class="tile-audio icon-button" title="Включить звук" aria-label="Включить звук" aria-pressed="false">${icon("silent")}</button><button ${tile.camera_id ? "" : "hidden"} class="tile-expand icon-button" title="На весь экран" aria-label="На весь экран: камера ${index+1}">${icon("expand")}</button></div></article>`;
   }).join("") : `<div class="empty"><p>Добавьте экран или выберите сетку.</p><button class="primary" id="empty-add">Добавить экран</button></div>`;
   if(!state.layout.tiles.length) { document.querySelector("#empty-add").onclick = () => document.querySelector("#add-tile").click(); return; }
   const tilesById = new Map(state.layout.tiles.map(t => [t.id,t]));
@@ -201,6 +207,7 @@ function renderTiles() {
     element.querySelector(".camera-trigger").onclick = () => { if(!dragged) chooseCamera(tile); };
     element.querySelector(".tile-menu").onclick = () => tileOptions(tile);
     const empty=element.querySelector(".empty-camera");if(empty)empty.onclick=()=>chooseCamera(tile);
+    element.querySelector(".tile-audio").onclick = () => toggleCameraAudio(tile,element);
     element.querySelector(".tile-expand").onclick = () => tile.camera_id ? expandCamera(element) : chooseCamera(tile);
     element.querySelector(".picture").ondblclick = event => { if(tile.camera_id && !event.target.closest("button")) expandCamera(element); };
     const header = element.querySelector(".tile-head");
@@ -267,7 +274,34 @@ function save() {
   return saving;
 }
 async function flushSave() { if(saveTimer) { clearTimeout(saveTimer); saveTimer = null; return save(); } return saving; }
-function clearTile(element) { const saved=freezeCameraFrame(element);if(element.cameraStream)element.cameraStream.detach(element);element.cameraStream=null;const video=element.querySelector("video");if(video){video.pause();video.removeAttribute("src");video.load();video.hidden=true;}element.querySelector(".stream-state").textContent=saved ? "Восстанавливаем эфир" : "Подключение…"; }
+function audioButtons() {
+  document.querySelectorAll(".tile-audio").forEach(button=>{
+    const active=audioSelection?.element===button.closest(".tile");
+    button.setAttribute("aria-pressed",String(active));button.innerHTML=icon(active ? "sound" : "silent");
+    button.title=active ? "Выключить звук" : "Включить звук";button.setAttribute("aria-label",button.title);
+  });
+}
+function stopCameraAudio(close=false) {
+  const previous=audioSelection;audioSelection=null;close ? cameraAudio.close() : cameraAudio.stop();audioButtons();
+  if(previous && socket?.readyState===WebSocket.OPEN)subscribe();
+}
+async function toggleCameraAudio(tile,element) {
+  if(audioSelection?.element===element){stopCameraAudio();subscribe();return;}
+  stopCameraAudio();
+  const selection=audioSelection={cid:tile.camera_id,tileId:tile.id,element};audioButtons();
+  try {
+    await cameraAudio.start(element.querySelector("video"));
+    if(audioSelection!==selection)return;
+    subscribe();
+    setTimeout(()=>{if(audioSelection===selection && !cameraAudio.packets){toast("Звук пока не поступает");}},6000);
+  } catch(error){if(audioSelection===selection){stopCameraAudio();subscribe();toast(error.message);}}
+}
+function reconcileAudioSelection() {
+  if(!audioSelection)return;
+  const tile=state.layout.tiles.find(tile=>tile.id===audioSelection.tileId);
+  if(!tile || tile.camera_id!==audioSelection.cid || !audioSelection.element.isConnected){stopCameraAudio();}
+}
+function clearTile(element) { if(audioSelection?.element===element)cameraAudio.reset();const saved=freezeCameraFrame(element);if(element.cameraStream)element.cameraStream.detach(element);element.cameraStream=null;const video=element.querySelector("video");if(video){video.pause();video.removeAttribute("src");video.load();video.hidden=true;}element.querySelector(".stream-state").textContent=saved ? "Восстанавливаем эфир" : "Подключение…"; }
 function drawCached(tile, element) {
   const stream=mediaStreams.get(tile.camera_id);if(!stream)return;
   if(element.cameraStream && element.cameraStream!==stream)clearTile(element);
@@ -275,9 +309,10 @@ function drawCached(tile, element) {
 }
 function subscriptions() { return [...new Set(state.layout.tiles.map(t => t.camera_id).filter(Boolean))]; }
 function subscribe() {
+  reconcileAudioSelection();
   const active = new Set(subscriptions());
   for(const [cid,stream] of mediaStreams) if(!active.has(cid)) { stream.destroy(); mediaStreams.delete(cid); }
-  if(socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({csrf,camera_ids:[...active]}));
+  if(socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({csrf,camera_ids:[...active],audio_camera_id:audioSelection?.cid ?? null}));
 }
 function connectVideo() {
   stopVideo(); if(!me || page !== "wall" || document.hidden) return;
@@ -304,9 +339,11 @@ function connectVideo() {
           const data=new Uint8Array(event.data.slice(offset,offset+length));
           if(kind===1) {
             const size=new DataView(data.buffer).getUint16(0);if(size>256 || size+2>=data.length)throw new Error("Неверный формат видео");
+            if(audioSelection?.cid===cid)cameraAudio.reset();
             const mime=new TextDecoder().decode(data.subarray(2,2+size));mediaStreams.get(cid)?.destroy();
             mediaStreams.set(cid,new CameraStream(mime,data.slice(2+size),ratio=>cameraRatios.set(cid,ratio)));
           } else if(kind===2 || kind===3)mediaStreams.get(cid)?.receive(kind,data);
+          else if(kind===4 && audioSelection?.cid===cid)cameraAudio.receive(data,mediaStreams.get(cid)?.players.get(audioSelection.element));
           incoming.set(cid,true);
         }
         offset+=length;
@@ -314,7 +351,7 @@ function connectVideo() {
     } catch { ws.close();return; }
     document.querySelectorAll(".tile").forEach(element => { const tile = tiles.get(element.dataset.tile); if(incoming.has(tile?.camera_id)) drawCached(tile,element); });
   };
-  ws.onclose = event => { if(epoch !== socketEpoch) return; document.querySelectorAll(".tile").forEach(clearTile); if(event.code === 4401) signedOut("Сессия завершена. Войдите снова"); else if(event.code === 4403) { toast("Права доступа изменились"); refresh().then(() => { reconnectTimer = setTimeout(connectVideo,1500); }); } else reconnectTimer = setTimeout(connectVideo,2000); };
+  ws.onclose = event => { if(epoch !== socketEpoch) return;stopCameraAudio(); document.querySelectorAll(".tile").forEach(clearTile); if(event.code === 4401) signedOut("Сессия завершена. Войдите снова"); else if(event.code === 4403) { toast("Права доступа изменились"); refresh().then(() => { reconnectTimer = setTimeout(connectVideo,1500); }); } else reconnectTimer = setTimeout(connectVideo,2000); };
 }
 window.addEventListener("beforeinstallprompt", event => { event.preventDefault(); installPrompt = event; });
 window.addEventListener("hashchange", locationChanged);

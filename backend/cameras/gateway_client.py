@@ -28,7 +28,7 @@ class RemotePool(RelayPool):
                             previous = None
                             while not ws.closed:
                                 self.prune()
-                                current = dict(camera_ids=sorted(self.sources),persistent_camera_ids=sorted(self.persistent))
+                                current = dict(camera_ids=sorted(self.sources),persistent_camera_ids=sorted(self.persistent),audio_camera_ids=sorted(self.sources))
                                 if current != previous:
                                     await ws.send_json(current)
                                     previous = current
@@ -57,6 +57,8 @@ class RemotePool(RelayPool):
                                                 length = struct.unpack_from('!H',payload)[0]
                                                 self.ingest(dict(cid=cid,token=source.token,type='init',generation=uuid.uuid4().hex,
                                                     mime=payload[2:2+length].decode('ascii')),payload[2+length:])
+                                            elif kind == 4:
+                                                self.ingest(dict(cid=cid,token=source.token,type='audio',generation=source.generation),payload)
                                             elif kind in (2,3):
                                                 self.ingest(dict(cid=cid,token=source.token,type='media',generation=source.generation,key=kind==3),payload)
                                         offset += size

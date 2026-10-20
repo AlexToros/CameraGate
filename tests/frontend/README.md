@@ -18,6 +18,8 @@ node tests/frontend/mobile.cjs
 node tests/frontend/navigation.cjs
 node tests/frontend/connection.cjs
 node tests/frontend/actions.cjs
+node tests/frontend/audio.cjs
+node tests/frontend/audio-ui.cjs
 ```
 
 Если Playwright установлен вне проекта, задайте путь к модулю через PLAYWRIGHT_MODULE. Порт стенда задаётся UI_TEST_PORT, адрес в сценарии — UI_TEST_URL. Скриншоты сохраняются в `.runtime/screenshots/mobile-ux-check`; путь можно заменить через UI_SCREENSHOTS_DIR. Завершите стенд через Ctrl+C после проверки.

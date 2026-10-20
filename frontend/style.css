@@ -272,3 +272,7 @@ body:has(dialog[open]){overflow:hidden}
 .rename-controls input{flex:1;min-width:0}
 .rename-controls .icon-button{flex:none;width:44px;min-height:44px}
 .camera-rename .error:empty{display:none}
+
+.tile-audio{position:absolute;left:6px;bottom:6px;z-index:3;width:36px;height:36px;min-height:36px;border:0;background:#102536aa;color:white;opacity:.8}
+.tile-audio:hover,.tile-audio[aria-pressed="true"]{background:#245f8d;color:white;opacity:1}
+@media(pointer:coarse){.tile-audio{width:44px;height:44px;min-height:44px}}

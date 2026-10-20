@@ -1,11 +1,13 @@
 """Shared continuous compressed sources and bounded per-viewer fan-out."""
 import asyncio
+from collections import deque
 import json
 import logging
 import struct
 import time
 import uuid
 
+from .audio import MAX_AUDIO
 from .streams import worker_command, terminate
 from ..paths import ROOT
 
@@ -25,8 +27,11 @@ class EncodedSource:
         self.frames = []
         self.key_index, self.gop_size = 0, 0
         self.sequence, self.size, self.key_at, self.last_frame = 0, 0, 0, 0
+        self.audio = deque()
+        self.audio_sequence = self.audio_size = 0
 
     def reset(self, state='Соединение прервано. Повтор подключения…'):
+        self.audio.clear(); self.audio_size = 0
         self.state, self.init, self.mime = state, b'', ''
         self.frames.clear()
         self.key_index = self.gop_size = 0
@@ -41,6 +46,15 @@ class EncodedSource:
             self.reset('Ожидание первого кадра…')
             self.generation = meta['generation']
             self.mime, self.init = meta['mime'], data
+        elif kind == 'audio' and self.init and meta['generation'] == self.generation:
+            if not 10 < len(data) <= 8010 or data[:2] != b'\x0e\x02':
+                return
+            now = time.monotonic()
+            self.audio_sequence += 1
+            self.audio.append((self.audio_sequence, now, data))
+            self.audio_size += len(data)
+            while self.audio and (self.audio_size > MAX_AUDIO or now-self.audio[0][1] > 1):
+                self.audio_size -= len(self.audio.popleft()[2])
         elif kind == 'media' and self.init and meta['generation'] == self.generation:
             now = time.monotonic()
             if meta['key']:
@@ -102,6 +116,20 @@ def pack_encoded(sources, sent):
         total += size
         sent[cid] = (source.generation, last)
     return states, b''.join(payload)
+
+
+def pack_audio(sources, sent):
+    payload = []
+    now = time.monotonic()
+    for cid, source in sources.items():
+        if not source.init or not source.frames or now-source.last_frame >= 5 or not source.audio or now-source.audio[-1][1] > 1:
+            sent.pop(cid, None)
+            continue
+        previous = sent.get(cid)
+        sequence = previous[1] if previous and previous[0] == source.generation else source.audio[-1][0]-1
+        payload.extend(packet(cid, 4, data) for number, at, data in source.audio if number > sequence and now-at <= 1)
+        sent[cid] = (source.generation, source.audio[-1][0])
+    return b''.join(payload)
 
 
 class RelayPool:

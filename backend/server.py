@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 from aiohttp import web, WSMsgType
 from .store import Store, Problem
 from .cameras.streams import make_pool
-from .cameras.relay import pack_encoded
+from .cameras.relay import pack_encoded, pack_audio
 from .paths import ROOT, FRONTEND
 
 COOKIE = 'viewer_session'
@@ -210,9 +210,11 @@ class Portal:
         self.sockets.add(ws)
         selected, sent, statuses = set(), {}, {}
         authenticated = False
+        audio_camera = None
+        audio_sent = {}
 
         async def receive():
-            nonlocal selected, authenticated
+            nonlocal selected, authenticated, audio_camera
             async for message in ws:
                 if message.type != WSMsgType.TEXT:
                     break
@@ -224,6 +226,12 @@ class Portal:
                     values = data.get('camera_ids')
                     if not isinstance(values,list) or len(values)>64 or any(type(c) is not int or c not in self.store.snapshot['cameras'] or not user['mask'] & (1<<c) for c in values):
                         raise Problem('Нет доступа к камере',403)
+                    audio_id = data.get('audio_camera_id')
+                    if audio_id is not None and (type(audio_id) is not int or audio_id not in values):
+                        raise Problem('Нет доступа к звуку камеры',403)
+                    if audio_id != audio_camera:
+                        audio_sent.clear()
+                    audio_camera = audio_id
                     selected = set(values)
                     for cid in sent.keys() - selected:
                         sent.pop(cid)
@@ -244,6 +252,8 @@ class Portal:
                 denied = {cid for cid in selected if cid not in self.store.snapshot['cameras'] or not user['mask'] & (1<<cid)}
                 if denied:
                     selected -= denied
+                    if audio_camera in denied:
+                        audio_camera = None; audio_sent.clear()
                     await ws.send_json(dict(type='revoked',camera_ids=sorted(denied)))
                 if not authenticated and time.monotonic()-started>10:
                     await ws.close(code=4403)
@@ -253,6 +263,8 @@ class Portal:
                     # In-memory traversal only. The socket emits one bounded batch
                     # of latest frames; slow readers never accumulate video history.
                     state, payload = pack_encoded(sources,sent)
+                    if audio_camera in sources:
+                        payload += pack_audio({audio_camera:sources[audio_camera]},audio_sent)
                     if state != statuses:
                         statuses = state
                         await asyncio.wait_for(ws.send_json(dict(type='status',cameras=state)),5)
@@ -315,7 +327,7 @@ def create_app(store, streams=None, secure=False, auto_sync=True):
     app[PORTAL] = portal
     app.router.add_get('/api/live',portal.live)
     app.router.add_route('*','/api/{tail:.*}',portal.api)
-    assets = {'/':'index.html','/app.js':'app.js','/admin.js':'admin.js','/player.js':'player.js','/style.css':'style.css','/manifest.webmanifest':'manifest.webmanifest',
+    assets = {'/':'index.html','/app.js':'app.js','/admin.js':'admin.js','/audio.js':'audio.js','/player.js':'player.js','/style.css':'style.css','/manifest.webmanifest':'manifest.webmanifest',
               '/sw.js':'sw.js','/icon-192.png':'icons/icon-192.png','/icon-512.png':'icons/icon-512.png','/apple-touch-icon.png':'icons/apple-touch-icon.png'}
     async def asset(request):
         return web.FileResponse(FRONTEND/assets[request.path])

@@ -299,7 +299,7 @@ class Transport:
 
 
 class Frames:
-    """Incremental DVRIP media framing; output Annex B, ignore audio/telemetry."""
+    """Incremental DVRIP media framing; Annex B video and optional G.711 audio collection."""
     def __init__(self):
         self.buffer = bytearray()
         self.ready = False
@@ -310,7 +310,7 @@ class Frames:
     def feed(self, data):
         return b''.join(unit[0] for unit in self.feed_units(data))
 
-    def feed_units(self, data):
+    def feed_units(self, data, audio=None):
         self.buffer.extend(data)
         output = []
         cursor = 0
@@ -344,6 +344,8 @@ class Frames:
                 self.ready = True
             if self.ready and kind in (0xfc, 0xfe, 0xfd):
                 output.append((bytes(self.buffer[marker + header:end]), header == 16, self.codec, self.fps))
+            if audio is not None and kind == 0xfa and self.buffer[marker+4:marker+6] == b'\x0e\x02' and 0 < length <= 4096:
+                audio.append(bytes(self.buffer[marker+header:end]))
             cursor = end
         del self.buffer[:cursor]
         if len(self.buffer) > 8 * 1024 * 1024 + 16:

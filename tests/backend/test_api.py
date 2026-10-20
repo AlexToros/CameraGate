@@ -1,4 +1,5 @@
 import asyncio
+import struct
 from contextlib import chdir
 import tempfile
 import time
@@ -55,6 +56,7 @@ class FakeStreams:
                 source = self.sources[cid] = EncodedSource(cid)
                 source.feed(dict(type='init',generation='test',mime='video/mp4; codecs="avc1.42E01E"'),b'init')
                 source.feed(dict(type='media',generation='test',key=True),self.image)
+                source.feed(dict(type='audio',generation='test'),struct.pack('!BBd',14,2,0)+b'\xd5'*320)
             self.sources[cid].last_frame = time.monotonic()
         return {cid:self.sources[cid] for cid in values}
     async def replace(self, config):
@@ -144,11 +146,33 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         _,headers,_=await self.viewer()
         self.assertEqual((await self.client.get('/api/admin/connection',headers=headers)).status,403)
 
+    async def test_audio_opt_in_is_single_camera_scoped_and_cannot_bypass_grants(self):
+        from tests.backend.test_relay import records
+        _,headers,csrf=await self.viewer()
+        self.streams.config={'test':True}
+        ws=await self.client.ws_connect('/api/live',headers=headers)
+        await ws.send_json(dict(csrf=csrf,camera_ids=[1]))
+        await ws.receive_json(timeout=3)
+        first=await ws.receive(timeout=3)
+        self.assertNotIn(4,[kind for cid,kind,data in records(first.data)])
+        await ws.send_json(dict(csrf=csrf,camera_ids=[1],audio_camera_id=1))
+        audio=await ws.receive(timeout=3)
+        self.assertEqual([(cid,kind) for cid,kind,data in records(audio.data)],[(1,4)])
+        await ws.send_json(dict(csrf=csrf,camera_ids=[1],audio_camera_id=None))
+        await asyncio.sleep(.12)
+        self.streams.sources[1].feed(dict(type='audio',generation='test'),struct.pack('!BBd',14,2,.04)+b'\x55'*320)
+        with self.assertRaises(asyncio.TimeoutError):await ws.receive(timeout=.2)
+        await ws.close()
+        forbidden=await self.client.ws_connect('/api/live',headers=headers)
+        await forbidden.send_json(dict(csrf=csrf,camera_ids=[1],audio_camera_id=2))
+        await forbidden.receive(timeout=3)
+        self.assertEqual(forbidden.close_code,4403)
+
     async def test_active_stream_revocation_and_block(self):
         user,headers,csrf = await self.viewer()
         self.streams.config = {'test':True}
         ws = await self.client.ws_connect('/api/live',headers=headers)
-        await ws.send_json(dict(csrf=csrf,camera_ids=[1]))
+        await ws.send_json(dict(csrf=csrf,camera_ids=[1],audio_camera_id=1))
         message = await ws.receive(timeout=3)
         self.assertEqual(message.type,WSMsgType.TEXT)
         self.assertEqual((await ws.receive(timeout=3)).type,WSMsgType.BINARY)
@@ -196,7 +220,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_missing_connection_status_and_shared_camera(self):
         _,headers,csrf = await self.viewer()
         ws = await self.client.ws_connect('/api/live',headers=headers)
-        await ws.send_json(dict(csrf=csrf,camera_ids=[1]))
+        await ws.send_json(dict(csrf=csrf,camera_ids=[1],audio_camera_id=1))
         message = await ws.receive_json(timeout=3)
         self.assertIn('не настроено',message['cameras']['1'])
         self.streams.config = {'test':True}
@@ -214,7 +238,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.get('/manifest.webmanifest')
         manifest = await response.json(content_type=None)
         self.assertEqual(manifest['display'],'standalone')
-        for path in ('/','/app.js','/admin.js','/player.js','/style.css','/sw.js','/icon-192.png','/icon-512.png','/apple-touch-icon.png'):
+        for path in ('/','/app.js','/admin.js','/audio.js','/player.js','/style.css','/sw.js','/icon-192.png','/icon-512.png','/apple-touch-icon.png'):
             self.assertEqual((await self.client.get(path)).status,200)
         response = await self.client.post('/api/auth/login',json=dict(login='admin',password=PASSWORD))
         cookie = response.cookies[COOKIE]

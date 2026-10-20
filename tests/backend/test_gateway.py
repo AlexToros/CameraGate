@@ -40,6 +40,10 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(len(sources),2)
                     self.assertTrue(all(s.frames[0][1] == upstream.image for s in sources.values()))
                     self.assertEqual(len(upstream.sources),2)
+                    deadline=time.monotonic()+3
+                    while not sources[1].audio and time.monotonic()<deadline:await asyncio.sleep(.02)
+                    self.assertTrue(sources[1].audio)
+                    self.assertTrue(sources[2].audio)
                     self.assertEqual(remote.subscribe([1])[1],sources[1])
                     await remote.replace(dict(config,PASSWORD='new-test-password'))
                     self.assertFalse(remote.sources)
