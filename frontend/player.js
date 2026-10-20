@@ -101,8 +101,9 @@
       const canvas=this.element.querySelector(".last-frame");if(canvas)canvas.hidden=true;
       captureFrame(this.element);
       if(this.video.videoWidth && this.video.videoHeight) {
-        const ratio=this.video.videoWidth/this.video.videoHeight;
-        this.element.style.setProperty("--ratio",ratio);this.stream.onRatio(ratio);
+        const nativeRatio=this.video.videoWidth/this.video.videoHeight;
+        this.stream.onRatio(nativeRatio);
+        this.element.style.setProperty("--ratio",this.stream.displayRatio?.() || nativeRatio);
       }
     }
     play(gesture=false) {
@@ -153,7 +154,7 @@
     }
   }
   class CameraStream {
-    constructor(mime,init,onRatio) { this.mime=mime;this.init=init;this.onRatio=onRatio;this.fragments=[];this.bytes=0;this.players=new Map();this.lastFrame=0;this.keyTime=0; }
+    constructor(mime,init,onRatio,displayRatio) { this.mime=mime;this.init=init;this.onRatio=onRatio;this.displayRatio=displayRatio;this.fragments=[];this.bytes=0;this.players=new Map();this.lastFrame=0;this.keyTime=0; }
     receive(kind,data) {
       if(kind===3) { this.fragments=[];this.bytes=0;this.keyTime=Date.now(); }
       else if(!this.fragments.length)return;

@@ -14,6 +14,16 @@ const cameraAudio = new CameraAudio();
 let audioSelection = null;
 cameraAudio.onError=message=>{stopCameraAudio();subscribe();toast(message);};
 const cameraRatios = new Map();
+function cameraRatio(cid) {return (cid && cameraRatios.get(cid+HD_OFFSET)) || 4/3;}
+function rememberCameraRatio(sourceId,ratio) {
+  if(cameraRatios.get(sourceId)===ratio)return;
+  cameraRatios.set(sourceId,ratio);
+  if(sourceId<=HD_OFFSET)return;
+  const cid=sourceId-HD_OFFSET,tiles=new Map(state.layout.tiles.map(tile=>[tile.id,tile.camera_id]));
+  document.querySelectorAll('.tile').forEach(element=>{
+    if(tiles.get(element.dataset.tile)===cid)element.style.setProperty('--ratio',ratio);
+  });
+}
 let tileObserver, cameraFullscreen = null;
 let stopWallReorder=()=>{};
 let routeEpoch = 0;
@@ -219,7 +229,7 @@ function renderTiles() {
     const tile = tilesById.get(element.dataset.tile);
     if(audible?.id===tile.id){Object.assign(audioSelection,{tileId:tile.id,element});cameraAudio.bindVideo(element.querySelector('video'));}
     element.style.setProperty("--width",Math.min(tile.width,columns));
-    element.style.setProperty("--ratio",cameraRatios.get(tile.camera_id) || 16/9);
+    element.style.setProperty("--ratio",cameraRatio(tile.camera_id));
     element.querySelector(".camera-trigger").onclick = () => chooseCamera(tile);
     element.querySelector(".tile-menu").onclick = () => tileOptions(tile);
     const empty=element.querySelector(".empty-camera");if(empty)empty.onclick=()=>chooseCamera(tile);
@@ -394,7 +404,7 @@ function connectVideo() {
               const selected=hdSelection;hdSelection=null;
               if(selected)drawCached({camera_id:selected.cid},selected.element);
               subscribe();toast("Браузер не поддерживает HD этой камеры");
-            } else mediaStreams.set(cid,new CameraStream(mime,data.slice(2+size),ratio=>cameraRatios.set(cid,ratio)));
+            } else mediaStreams.set(cid,new CameraStream(mime,data.slice(2+size),ratio=>rememberCameraRatio(cid,ratio),()=>cameraRatio(cid>HD_OFFSET ? cid-HD_OFFSET : cid)));
           } else if(kind===2 || kind===3)mediaStreams.get(cid)?.receive(kind,data);
           if(kind>=1 && kind<=3)incoming.add(cid);
         }
