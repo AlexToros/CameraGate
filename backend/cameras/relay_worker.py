@@ -13,10 +13,13 @@ import sys
 import threading
 import time
 import uuid
+from pathlib import Path
 
 from .audio import AudioClock
 from .connections import ConnectionGate, ControlSlot
 from .motion import MotionMonitor
+from .event_log import EventJournal
+from ..paths import ROOT
 from .session import SharedSession, SessionChanged
 from .mp4 import Muxer, parameter_sets, ReorderedStream
 from .vesta import Transport, Frames, discover
@@ -92,6 +95,7 @@ class Channel:
                     if self.stop.is_set():
                         return
                     transport = Transport(None, self.config['SERIAL_NUM'], hub=self.hub)
+                    transport.event_channel=self.cid
                     transport.session=lease.transport.session
                     stage = 'claim'
                     transport.monitor(self.cid-1, 'Claim', 1413)
@@ -220,9 +224,16 @@ def main():
             except (ValueError, KeyError, TypeError):
                 stop()
     threading.Thread(target=commands, daemon=True).start()
-    hub = session = None
+    hub = session = journal = None
     try:
+        data_dir=Path(os.environ.get('DATA_DIR',ROOT/'.runtime/data'))
+        try:
+            data_dir.mkdir(parents=True,exist_ok=True)
+            journal=EventJournal(data_dir/'recorder-events.jsonl',config)
+        except (OSError,RuntimeError):
+            pass  # Diagnostics must not prevent live video from starting.
         hub = Transport(discover(), None)
+        hub.event_journal=journal
         session=SharedSession(hub,config,stopping,connecting,outbox)
         session.start()
         monitor = MotionMonitor(hub, config, outbox, stopping, ControlSlot(connecting),session=session)
@@ -241,7 +252,7 @@ def main():
                 selected = desired.copy()
             reconcile_channels(channels,selected,lambda cid,token:
                 Channel(cid,token,hub,config,outbox,connecting,initializing,session))
-            outbox.put(dict(type='heartbeat'))
+            outbox.put(dict(type='heartbeat',event_log=journal.stats() if journal else dict(write_failures=1)))
             with condition:
                 condition.wait(timeout=1)
     except Exception as error:
@@ -256,6 +267,7 @@ def main():
         if session:session.close()
         if hub:
             hub.close()
+        if journal:journal.close()
         os._exit(0)
 
 

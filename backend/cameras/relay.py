@@ -163,10 +163,11 @@ class RelayPool:
         self.motion_details={}
         self.motion_logged_at=0
         self.session_details={}
+        self.event_log_details={}
 
     def diagnostics(self):
         now=time.monotonic()
-        return dict(session=self.session_details.copy(),motion=dict(**self.motion_details,available=self.motion(set(self.sources))['available'],
+        return dict(session=self.session_details.copy(),event_log=self.event_log_details.copy(),motion=dict(**self.motion_details,available=self.motion(set(self.sources))['available'],
             active_camera_ids=sorted(self.motion_ids),snapshot_age=round(now-self.motion_at,2) if self.motion_at else None),
             sources=[dict(camera_id=cid,state=s.state,frame_age=round(now-s.last_frame,3) if s.last_frame else None,
                 received_frames=s.received_frames,received_bytes=s.received_bytes,arrival_gaps=s.arrival_gaps,
@@ -212,6 +213,10 @@ class RelayPool:
             self.cache_bytes -= source.size+len(source.init)
 
     def ingest(self, meta, data):
+        if meta.get('type')=='heartbeat':
+            details=meta.get('event_log',{})
+            self.event_log_details={key:details[key] for key in ('written','dropped','write_failures','queued_bytes') if type(details.get(key)) is int and details[key]>=0}
+            return
         if meta.get('type')=='session':
             self.session_details={key:meta[key] for key in ('ready','logins','generation','error') if key in meta}
             return
@@ -301,6 +306,7 @@ class RelayPool:
             except (OSError, ValueError, KeyError, RuntimeError, asyncio.IncompleteReadError, asyncio.TimeoutError):
                 LOG.warning('media_worker_restart')
             finally:
+                self.event_log_details={}
                 self.session_details={}
                 self.motion_ids, self.motion_at = set(), 0
                 if writer:
@@ -314,6 +320,7 @@ class RelayPool:
             delay = min(30, delay*2)
 
     async def replace(self, config):
+        self.event_log_details={}
         self.motion_ids, self.motion_at = set(), 0
         self.motion_details={}
         self.session_details={}

@@ -229,6 +229,9 @@ class Transport:
                     if self.session and fields[2] != self.session:
                         if fields[-2]==1504:self.foreign_alarm_messages+=1
                         continue
+                    journal=getattr(getattr(self,'hub',None) or self,'event_journal',None)
+                    if journal is not None:
+                        journal.record(fields,body,getattr(self,'event_channel',None))
                     return fields, body
             remaining = deadline - time.monotonic()
             if remaining <= 0:
