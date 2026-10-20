@@ -13,7 +13,7 @@ let audioSelection = null;
 cameraAudio.onError=message=>{stopCameraAudio();subscribe();toast(message);};
 const cameraRatios = new Map();
 let tileObserver, cameraFullscreen = null;
-let dragged;
+let stopWallReorder=()=>{};
 let routeEpoch = 0;
 let activeLocation = location.hash;
 const roleName = role => role === "admin" ? "Администратор" : "Пользователь";
@@ -42,8 +42,8 @@ function bindForm(form, submit) {
 }
 function dialog(title, body, kind="sheet") { modal.className=`dialog-${kind}`;modal.setAttribute("aria-label",title); modal.innerHTML = `<header class="dialog-head"><h2>${h(title)}</h2><button class="close icon-button" aria-label="Закрыть">×</button></header><div class="dialog-content">${body}</div>`; if(kind==="picker")modal.querySelector(".dialog-head").append(modal.querySelector(".camera-filters"));modal.querySelector(".close").onclick = () => modal.close(); modal.showModal(); }
 modal.addEventListener("click", event => { if (event.target === modal) { const rect = modal.getBoundingClientRect(); if(event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) modal.close(); } });
-function stopVideo() { stopArchive();showMotion();stopCameraAudio(true);clearTimeout(reconnectTimer);socketEpoch++;if(socket)socket.close();socket=null;if(cameraFullscreen){cameraFullscreen.classList.remove("video-expanded");if(document.fullscreenElement===cameraFullscreen)document.exitFullscreen().catch(()=>{});cameraFullscreen=null;}for(const stream of mediaStreams.values())stream.destroy();mediaStreams.clear(); }
-function signedOut(message) { toggleAdminMenu(false);adminDraft=null;finishAdminPicker();root.classList.remove("editing");routeEpoch++; tileObserver?.disconnect(); me = null; csrf = null; state = null; clearInterval(refreshTimer); clearTimeout(saveTimer); stopVideo(); if(modal.open) modal.close(); authView("login", null, message); }
+function stopVideo() {stopArchive();showMotion();stopCameraAudio(true);clearTimeout(reconnectTimer);socketEpoch++;if(socket)socket.close();socket=null;if(cameraFullscreen){cameraFullscreen.classList.remove("video-expanded");if(document.fullscreenElement===cameraFullscreen)document.exitFullscreen().catch(()=>{});cameraFullscreen=null;}for(const stream of mediaStreams.values())stream.destroy();mediaStreams.clear(); }
+function signedOut(message) { stopWallReorder(); toggleAdminMenu(false);adminDraft=null;finishAdminPicker();root.classList.remove("editing");routeEpoch++; tileObserver?.disconnect(); me = null; csrf = null; state = null; clearInterval(refreshTimer); clearTimeout(saveTimer); stopVideo(); if(modal.open) modal.close(); authView("login", null, message); }
 function authView(mode, invitation, message = "") {
   const setup = mode === "setup", invite = mode === "invite";
   root.innerHTML = `<main class="auth"><div class="brand-mark" aria-hidden="true">▦</div><h1>${setup ? "Первый администратор" : invite ? "Регистрация" : "Домовые камеры"}</h1><p class="muted">${setup ? "" : invite ? `Здравствуйте, ${h(invitation.last_name)} ${h(invitation.first_name)}!<br>Придумайте логин для входа и пароль.` : ""}</p><form class="stack" id="auth-form">${setup ? `<div class="two"><label>Фамилия<input name="last_name" autocomplete="family-name" required maxlength="100"></label><label>Имя<input name="first_name" autocomplete="given-name" required maxlength="100"></label></div>` : ""}<label>Логин<input name="login" autocomplete="username" autocapitalize="none" spellcheck="false" pattern="[A-Za-z0-9._\\-]{3,64}" minlength="3" maxlength="64" required></label><label>Пароль<input name="password" type="password" autocomplete="${mode === "login" ? "current-password" : "new-password"}" ${mode === "login" ? "" : "minlength=6"} maxlength="128" required></label>${mode !== "login" ? `<label>Повторите пароль<input name="password_confirmation" type="password" autocomplete="new-password" minlength="6" maxlength="128" required></label><small>От 6 символов.</small>` : ""}<div class="error" role="alert">${h(message)}</div><button class="primary" type="submit">${setup ? "Создать администратора" : invite ? "Зарегистрироваться" : "Войти"}</button></form><div class="install-help">${mode === "login" ? "Вход по приглашению. " : ""}${showInstallButton() ? `<button id="install" type="button">Установить</button>` : ""}</div></main>`;
@@ -62,6 +62,7 @@ async function install() {
   else { const ios=/iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform==="MacIntel" && navigator.maxTouchPoints>1);toast(ios ? "«Поделиться» → «На экран Домой»" : "Меню браузера → «Установить приложение»"); }
 }
 async function boot() {
+  stopWallReorder();
   toggleAdminMenu(false);
   activeLocation=location.hash;
   const epoch = ++routeEpoch;
@@ -101,6 +102,7 @@ async function refresh() {
   } catch(e) { if(e.status !== 401) toast(navigator.onLine ? e.message : "Нет подключения к сети"); }
 }
 function render() {
+  stopWallReorder();
   tileObserver?.disconnect();
   root.classList.remove("editing");
   document.body.classList.remove("admin-menu-open");
@@ -137,6 +139,7 @@ async function locationChanged() {
   render();window.scrollTo(0,0);
 }
 const icons = {
+  grip: '<path d="M9 5h.01M15 5h.01M9 12h.01M15 12h.01M9 19h.01M15 19h.01" stroke-width="3"/>',
   motion: '<circle cx="14" cy="4" r="2"/><path d="m7 10 4-3 4 2 3 4m-7-6-2 7 5 3 1 5m-6-8-4 7m-1-8h4"/>',
   sound: '<path d="M11 5 6 9H3v6h3l5 4zM15 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/>',
   silent: '<path d="M11 5 6 9H3v6h3l5 4zM16 9l5 6m0-6-5 6"/>',
@@ -188,6 +191,7 @@ function gridOptions() {
 }
 function renderTiles() {
   const wall = document.querySelector("#wall"); if(!wall) return;
+  stopWallReorder();
   stopCameraAudio();
   tileObserver?.disconnect();
   for(const stream of mediaStreams.values())stream.releasePlayers();
@@ -196,7 +200,7 @@ function renderTiles() {
   const cameras = new Map(state.cameras.map(c => [c.id,c]));
   wall.innerHTML = state.layout.tiles.length ? state.layout.tiles.map((tile,index) => {
     const name = cameras.get(tile.camera_id)?.name || `Экран ${index+1}`;
-    return `<article class="tile" data-tile="${h(tile.id)}" aria-label="Экран ${index+1}"><div class="tile-head" draggable="true"><span class="status-dot" aria-hidden="true"></span><button class="camera-trigger" aria-label="Камера экрана ${index+1}: ${h(name)}" title="${h(name)}">${h(name)}${icon("down")}</button><span class="tile-motion" data-camera="${tile.camera_id || 0}" ${movingCameras.has(tile.camera_id) ? "" : "hidden"} role="img" aria-label="Движение" title="Движение">${icon("motion")}</span><button class="tile-menu icon-button" title="Настройки экрана" aria-label="Настройки экрана ${index+1}">${icon("more")}</button></div><div class="picture"><video muted autoplay playsinline webkit-playsinline disableRemotePlayback preload="auto"></video><canvas class="last-frame" hidden aria-hidden="true"></canvas><span class="stream-state">${tile.camera_id ? "Подключение…" : ""}</span>${!tile.camera_id ? `<button class="empty-camera">${icon("plus")}<span>Камера</span></button>` : ""}<button ${tile.camera_id ? "" : "hidden"} class="tile-audio icon-button" title="Включить звук" aria-label="Включить звук" aria-pressed="false">${icon("silent")}</button><button ${tile.camera_id ? "" : "hidden"} class="tile-expand icon-button" title="На весь экран" aria-label="На весь экран: камера ${index+1}">${icon("expand")}</button></div></article>`;
+    return `<article class="tile" data-tile="${h(tile.id)}" aria-label="Экран ${index+1}"><div class="tile-head"><button type="button" class="tile-drag icon-button" title="Перетащить камеру" aria-label="Переместить камеру: ${h(name)}">${icon("grip")}</button><span class="status-dot" aria-hidden="true"></span><button class="camera-trigger" aria-label="Камера экрана ${index+1}: ${h(name)}" title="${h(name)}">${h(name)}${icon("down")}</button><span class="tile-motion" data-camera="${tile.camera_id || 0}" ${movingCameras.has(tile.camera_id) ? "" : "hidden"} role="img" aria-label="Движение" title="Движение">${icon("motion")}</span><button class="tile-menu icon-button" title="Настройки экрана" aria-label="Настройки экрана ${index+1}">${icon("more")}</button></div><div class="picture"><video muted autoplay playsinline webkit-playsinline disableRemotePlayback preload="auto"></video><canvas class="last-frame" hidden aria-hidden="true"></canvas><span class="stream-state">${tile.camera_id ? "Подключение…" : ""}</span>${!tile.camera_id ? `<button class="empty-camera">${icon("plus")}<span>Камера</span></button>` : ""}<button ${tile.camera_id ? "" : "hidden"} class="tile-audio icon-button" title="Включить звук" aria-label="Включить звук" aria-pressed="false">${icon("silent")}</button><button ${tile.camera_id ? "" : "hidden"} class="tile-expand icon-button" title="На весь экран" aria-label="На весь экран: камера ${index+1}">${icon("expand")}</button></div></article>`;
   }).join("") : `<div class="empty"><p>Добавьте экран или выберите сетку.</p><button class="primary" id="empty-add">Добавить экран</button></div>`;
   if(!state.layout.tiles.length) { document.querySelector("#empty-add").onclick = () => document.querySelector("#add-tile").click(); return; }
   const tilesById = new Map(state.layout.tiles.map(t => [t.id,t]));
@@ -210,20 +214,30 @@ function renderTiles() {
     const tile = tilesById.get(element.dataset.tile);
     element.style.setProperty("--width",Math.min(tile.width,columns));
     element.style.setProperty("--ratio",cameraRatios.get(tile.camera_id) || 16/9);
-    element.querySelector(".camera-trigger").onclick = () => { if(!dragged) chooseCamera(tile); };
+    element.querySelector(".camera-trigger").onclick = () => chooseCamera(tile);
     element.querySelector(".tile-menu").onclick = () => tileOptions(tile);
     const empty=element.querySelector(".empty-camera");if(empty)empty.onclick=()=>chooseCamera(tile);
     element.querySelector(".tile-audio").onclick = () => toggleCameraAudio(tile,element);
     element.querySelector(".tile-expand").onclick = () => tile.camera_id ? expandCamera(element) : chooseCamera(tile);
     element.querySelector(".picture").ondblclick = event => { if(tile.camera_id && !event.target.closest("button")) expandCamera(element); };
-    const header = element.querySelector(".tile-head");
-    header.ondragstart = event => { dragged = tile.id; event.dataTransfer.setData("text/plain",tile.id); element.classList.add("dragging"); };
-    header.ondragend = () => { dragged = null; wall.querySelectorAll(".tile").forEach(t => t.classList.remove("dragging","drop")); };
-    element.ondragover = event => { if(dragged && dragged !== tile.id) { event.preventDefault(); element.classList.add("drop"); } };
-    element.ondragleave = () => element.classList.remove("drop");
-    element.ondrop = event => { event.preventDefault(); const from = state.layout.tiles.findIndex(t => t.id === dragged), to = state.layout.tiles.findIndex(t => t.id === tile.id); if(from>=0 && to>=0) { state.layout.tiles.splice(to,0,state.layout.tiles.splice(from,1)[0]); dragged = null; renderTiles(); changed(); } };
     tileObserver.observe(element);
     drawCached(tile,element);
+  });
+  stopWallReorder=enableWallReorder(wall,(sourceId,targetId)=>{
+    const from=state.layout.tiles.findIndex(tile=>tile.id===sourceId),to=state.layout.tiles.findIndex(tile=>tile.id===targetId);
+    if(from<0 || to<0 || from===to)return;
+    const nodes=new Map([...wall.querySelectorAll('.tile')].map(element=>[element.dataset.tile,element]));
+    const source=nodes.get(sourceId),target=nodes.get(targetId),reference=from<to ? target.nextElementSibling : target;
+    state.layout.tiles.splice(to,0,state.layout.tiles.splice(from,1)[0]);
+    if(wall.moveBefore)wall.moveBefore(source,reference);else wall.insertBefore(source,reference);
+    state.layout.tiles.forEach((tile,index)=>{
+      const element=nodes.get(tile.id),name=cameras.get(tile.camera_id)?.name || `Экран ${index+1}`;
+      element.setAttribute('aria-label',`Экран ${index+1}`);
+      element.querySelector('.camera-trigger').setAttribute('aria-label',`Камера экрана ${index+1}: ${name}`);
+      element.querySelector('.tile-menu').setAttribute('aria-label',`Настройки экрана ${index+1}`);
+      element.querySelector('.tile-expand').setAttribute('aria-label',`На весь экран: камера ${index+1}`);
+    });
+    changed();
   });
 }
 function chooseCamera(tile, onSelect) {

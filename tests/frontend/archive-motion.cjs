@@ -4,7 +4,7 @@ const temp=fs.mkdtempSync(path.join(os.tmpdir(),'cameragate-archive-ui-'));
 const sample=path.join(temp,'sample.mp4');
 execFileSync(process.env.FFMPEG_BINARY || 'ffmpeg',['-hide_banner','-loglevel','error','-f','lavfi','-i','testsrc=size=160x120:rate=10','-t','4','-c:v','libx264','-bf','0','-threads','1','-pix_fmt','yuv420p','-movflags','empty_moov+default_base_moof+frag_keyframe','-y',sample]);
 (async()=>{const browser=await chromium.launch({headless:true,executablePath:process.env.CHROME_EXECUTABLE});try{
- const page=await browser.newPage({...devices['iPhone X']}),errors=[],plays=[];let live,closed=0,searches=0;
+ const page=await browser.newPage({...devices['iPhone X']}),errors=[],plays=[];let live,closed=0,searches=0,releaseSearch;
  page.on('pageerror',e=>errors.push(e.message));
  await page.routeWebSocket('**/api/live',socket=>{live=socket;socket.onMessage(()=>{});});
  await page.routeWebSocket('**/api/admin/archive/play',socket=>{
@@ -17,6 +17,7 @@ execFileSync(process.env.FFMPEG_BINARY || 'ffmpeg',['-hide_banner','-loglevel','
  });
  await page.route('**/api/admin/archive/search',async route=>{
    searches++;const input=route.request().postDataJSON();assert.equal(input.camera_id,1);
+   if(searches===1)await new Promise(resolve=>releaseSearch=resolve);
    const record={id:'test-record',start:'2026-10-20 10:00:00',end:'2026-10-20 10:01:00',duration:60};
    await route.fulfill({json:{records:input.cursor ? [record,{...record,id:'second',start:'2026-10-20 11:00:00',end:'2026-10-20 11:01:00'}] : [record],cursor:input.cursor ? null : '2026-10-20 10:00:00'}});
  });
@@ -28,7 +29,10 @@ execFileSync(process.env.FFMPEG_BINARY || 'ffmpeg',['-hide_banner','-loglevel','
  live.send(JSON.stringify({type:'motion',available:false,camera_ids:[]}));await page.locator('.tile-motion:visible').first().waitFor({state:'hidden'});
  await page.getByRole('button',{name:'Управление',exact:true}).click();await page.locator('.admin-menu').click();await page.locator('a[href="#/admin/archive"]').click();
  await page.locator('.archive-search [name=camera_id]').selectOption('1');await page.locator('.archive-search [name=date]').fill('2026-10-20');
- await page.locator('.archive-search button').click();await page.locator('.archive-record').waitFor();
+ await page.locator('.archive-search button').click();await page.locator('.archive-search-progress').waitFor();
+ assert.equal(await page.locator('.archive-search button').textContent(),'Поиск…');assert.equal(await page.locator('.archive-search').getAttribute('aria-busy'),'true');
+ assert.equal(await page.locator('.archive-search [name=camera_id]').isDisabled(),true);
+ releaseSearch();await page.locator('.archive-record').waitFor();assert.equal(await page.locator('.archive-search-progress').count(),0);
  await page.locator('.archive-more').click();await page.locator('.archive-record').nth(1).waitFor();assert.equal(await page.locator('.archive-record').count(),2);assert.equal(searches,2);
  await page.locator('.archive-record').first().click();await page.locator('.archive-view video').waitFor();await page.waitForTimeout(1000);
  const playback=await page.locator('.archive-view video').evaluate(video=>({width:video.videoWidth,time:video.currentTime,paused:video.paused,error:video.error?.message}));

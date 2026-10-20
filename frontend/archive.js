@@ -115,9 +115,14 @@ function renderArchive(body) {
     const current=++epoch;
     if(!append){stopArchive();view.hidden=true;records.clear();list.innerHTML='';cursor=null;query=Object.fromEntries(new FormData(form));}
     const submit=form.querySelector('[type=submit]');submit.disabled=more.disabled=true;error.textContent='';
+    form.setAttribute('aria-busy','true');list.setAttribute('aria-busy','true');
+    form.querySelectorAll('input,select').forEach(input=>input.disabled=true);
+    submit.textContent=append ? 'Найти' : 'Поиск…';more.textContent=append ? 'Загрузка…' : 'Ещё';
+    if(!append)list.innerHTML='<p class="archive-search-progress" role="status"><span class="search-spinner" aria-hidden="true"></span>Ищем записи…</p>';
     try {
       const result=await api('/api/admin/archive/search','POST',{camera_id:+query.camera_id,date:query.date,cursor});
       if(!body.isConnected || epoch!==current)return;
+      if(!append)list.innerHTML='';
       for(const record of result.records) {
         const key=record.start+'|'+record.end;
         if(records.has(key))continue;
@@ -133,8 +138,8 @@ function renderArchive(body) {
       }
       cursor=result.cursor;more.hidden=!cursor;
       if(!records.size)list.innerHTML='<p class="empty">За эту дату записей нет</p>';
-    } catch(e){if(body.isConnected && epoch===current)error.textContent=e.message;}
-    finally{if(epoch===current)submit.disabled=more.disabled=false;}
+    } catch(e){if(body.isConnected && epoch===current){if(!append)list.innerHTML='';error.textContent=e.message;}}
+    finally{if(epoch===current){submit.disabled=more.disabled=false;submit.textContent='Найти';more.textContent='Ещё';form.querySelectorAll('input,select').forEach(input=>input.disabled=false);form.removeAttribute('aria-busy');list.removeAttribute('aria-busy');}}
   };
   form.onsubmit=event=>{event.preventDefault();search(false);};more.onclick=()=>search(true);
 }

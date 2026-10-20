@@ -297,4 +297,15 @@ body:has(dialog[open]){overflow:hidden}
 .archive-records{margin:12px -20px}
 .archive-record[aria-current]{background:#e3f0e9}
 .archive-more{display:block;margin:12px auto}
+.archive-search-progress{display:flex;align-items:center;justify-content:center;gap:10px;padding:24px 12px;color:var(--muted)}
+.search-spinner{width:16px;height:16px;border:2px solid var(--line);border-top-color:var(--blue);border-radius:50%;animation:search-spin .8s linear infinite}
+@keyframes search-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.search-spinner{animation:none}}
 @media(max-width:600px){.archive-body{padding:12px}.archive-search label{min-width:calc(50% - 12px)}.archive-search button{width:100%}.archive-records{margin:12px -12px}.archive-controls{gap:8px}}
+
+.tile-drag{width:20px;min-width:20px;min-height:24px;height:24px;border:0;background:transparent;color:#aec2d1;cursor:grab;touch-action:none;user-select:none}
+.tile-drag svg{width:14px;height:18px}
+.tile-drag:hover{background:#496073;color:white}
+.wall-reordering,.wall-reordering *{cursor:grabbing!important;user-select:none!important}
+.tile-drag-ghost{position:fixed;left:0;top:0;z-index:1000;pointer-events:none;max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:8px 12px;border-radius:6px;background:#314353;color:#fff;box-shadow:0 4px 16px #0004;font-size:13px}
+@media(pointer:coarse){.tile-drag{width:30px;min-width:30px;height:38px;min-height:38px}}

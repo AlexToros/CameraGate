@@ -1,6 +1,6 @@
 /* Only the public app shell is cached. Never cache APIs, media or identities. */
 const SHELL = "camera-shell-v1";
-const FILES = ["/", "/audio.js", "/archive.js", "/player.js", "/admin.js", "/app.js", "/style.css", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png", "/apple-touch-icon.png"];
+const FILES = ["/", "/audio.js", "/archive.js", "/reorder.js", "/player.js", "/admin.js", "/app.js", "/style.css", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png", "/apple-touch-icon.png"];
 self.addEventListener("install", event => {
   event.waitUntil(caches.open(SHELL).then(cache => cache.addAll(FILES)).then(() => self.skipWaiting()));
 });
