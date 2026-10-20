@@ -99,6 +99,7 @@ class ArchiveExport:
             key:job['entry'][key] for key in ('file','start','end','cid')},offset=job['start'],end_offset=job['end']))
         reading=process=waiting=None
         try:
+            self.check(job)
             async with asyncio.timeout(20*60):
                 raw=Path(job['directory'].name)/'source.mp4'
                 size=frames=0
@@ -151,6 +152,10 @@ class ArchiveExport:
             raise
         except Exception as error:
             job.update(state='error',error=str(error) if isinstance(error,Problem) else 'Не удалось скачать запись с регистратора. Повторите попытку',touched=time.monotonic())
+            if reading:
+                reading.cancel()
+                await asyncio.gather(reading,return_exceptions=True)
+            await iterator.aclose()
             await terminate(process)
             await asyncio.to_thread(job['directory'].cleanup)
         finally:

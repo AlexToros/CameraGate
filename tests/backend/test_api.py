@@ -494,6 +494,15 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(manager.job)
         self.assertEqual(self.app[PORTAL].archive.recorder.play_calls,[])
 
+    async def test_export_revoked_before_preparation_never_starts_recorder_reader(self):
+        recorder=FakeRecorder();record=await self.export_record(recorder)
+        archive=self.app[PORTAL].archive
+        with tempfile.TemporaryDirectory() as directory:
+            job=dict(config=self.streams.config,entry=archive.entries[record],start=0,end=5,request=None,directory=tempfile.TemporaryDirectory(dir=directory))
+            with patch.object(self.app[PORTAL],'actor',side_effect=Problem('Войдите снова',401)):
+                await archive.export.prepare(job)
+            self.assertEqual(job['state'],'error');self.assertEqual(recorder.play_calls,[])
+
     async def test_export_cancel_closes_reader_and_frees_only_export_slot(self):
         recorder=FakeRecorder();record=await self.export_record(recorder)
         manager=self.app[PORTAL].archive.export
