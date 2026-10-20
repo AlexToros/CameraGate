@@ -287,7 +287,7 @@ class Transport:
     def monitor_command(self, channel, action):
         payload = self.command('OPMonitor')
         payload['OPMonitor'] = {'Action': action, 'Parameter': {
-            'Channel': channel, 'CombinMode': 'CONNECT_ALL',
+            'Channel': channel, 'CombinMode': 'NONE',
             'StreamType': 'Extra1', 'TransMode': 'TCP'}}
         return payload
 

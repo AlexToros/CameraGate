@@ -63,6 +63,14 @@ def delta(data):
 
 
 class MediaTests(unittest.TestCase):
+    def test_monitor_requests_one_channel_with_matching_claim_start_stop(self):
+        transport=Transport.__new__(Transport)
+        transport.session=7
+        payloads=[transport.monitor_command(3,action) for action in ('Claim','Start','Stop')]
+        expected=dict(Channel=3,CombinMode='NONE',StreamType='Extra1',TransMode='TCP')
+        self.assertEqual([payload['OPMonitor']['Parameter'] for payload in payloads],[expected]*3)
+        self.assertTrue(all(payload['SessionID']=='0x00000007' for payload in payloads))
+
     def test_fragmented_frames_match_whole_input_and_skip_audio(self):
         key = b'\0\0\0\1\x40\x01{random-compressed-data}'
         change = b'\0\0\0\1\x02\x01delta'

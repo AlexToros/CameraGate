@@ -64,7 +64,7 @@
 - VestaCloud uses XMEye/Xiongmai P2P and DVRIP. Only the low-level `vv_nat_*` functions are used; the high-level vendor login crashed.
 - macOS x86_64 vendor library lives in ignored `.runtime/libnetsdk.dylib`. Rosetta is required on Apple Silicon for the transport process; FFmpeg is native.
 - Never expose serial number, device login/password, password-equivalent hashes or raw SDK output. Native stdout/stderr are silenced before loading the library.
-- DVRIP media must be routed by message id, assembled across packets and decoded only from a complete keyframe. Reject packets from another DVRIP session.
+- DVRIP media must be routed by message id, assembled across packets and decoded only from a complete keyframe. Reject packets from another DVRIP session. Dedicated channel sockets use CombinMode=NONE with matching Claim/Start/Stop parameters; this matches the go2rtc/OpenIPC per-channel monitor requests. A successful CONNECT_ALL request is not evidence that a combined multi-channel transport is implemented.
 - SDK send length includes a 12-byte transport envelope. Start-monitor does not necessarily return an acknowledgement.
 - Each stream must isolate stale frames by generation. The browser must wait for the actual new image before revealing it.
 - Do not confuse SDK connection caching with web caching. Disabling the old SDK cache was a compatibility workaround, not a proven speed optimization.
