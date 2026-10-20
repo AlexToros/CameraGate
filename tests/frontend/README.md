@@ -22,11 +22,16 @@ node tests/frontend/audio.cjs
 node tests/frontend/audio-routing.cjs
 node tests/frontend/audio-ui.cjs
 node tests/frontend/archive-motion.cjs
+node tests/frontend/reorder.cjs
+node tests/frontend/buffering.cjs
+node tests/frontend/player-startup.cjs
 ```
 
 Если Playwright установлен вне проекта, задайте путь к модулю через PLAYWRIGHT_MODULE. Порт стенда задаётся UI_TEST_PORT, адрес в сценарии — UI_TEST_URL. Скриншоты сохраняются в `.runtime/screenshots/mobile-ux-check`; путь можно заменить через UI_SCREENSHOTS_DIR. Завершите стенд через Ctrl+C после проверки.
 
 Для archive-motion.cjs нужен FFmpeg (`FFMPEG_BINARY`) и браузер с H.264 (`CHROME_EXECUTABLE`, если тестовая сборка Chromium не поддерживает кодек). Сценарий создаёт искусственный ролик во временной папке и удаляет его после проверки.
+
+player-startup.cjs использует те же зависимости и синтетическое видео: первый кадр должен появиться без стартового запаса, а восстановительный буфер — включаться после опустошения потока. buffering.cjs проверяет границы и поведение адаптивного запаса без браузера. reorder.cjs проверяет перетаскивание мышью и касанием, сохранение порядка и отсутствие новых подписок или замены видеоэлементов.
 
 Профиль устройства проверяет размеры и touch-настройки, но не заменяет проверку Safari, клавиатуры и установки на физическом телефоне.
 

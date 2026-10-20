@@ -1,6 +1,25 @@
 /* Compressed fMP4 playback. No credentials, transcoding or unbounded queues. */
 (() => {
   const MAX_BYTES = 2 * 1024 * 1024;
+  class BufferPolicy {
+    constructor(){this.target=.6;this.recovering=false;this.lastStall=this.lastDecay=Date.now();}
+    stall(now=Date.now()){
+      if(this.recovering)return;
+      this.target=Math.min(1.5,this.target+.3);this.recovering=true;this.lastStall=now;
+    }
+    ready(ahead,now=Date.now()){
+      if(this.recovering && ahead<this.target)return false;
+      this.recovering=false;
+      if(now-this.lastStall>30000 && now-this.lastDecay>10000){this.target=Math.max(.6,this.target-.1);this.lastDecay=now;}
+      return true;
+    }
+    position(start,end,current,started){
+      // First picture never waits for the recovery reserve. Start at the live
+      // edge of the data already received; build a reserve only after a stall.
+      if(!started)return Math.max(start,end-.05);
+      return current<start || end-current>Math.max(3,this.target+1.5) ? Math.max(start,end-this.target) : null;
+    }
+  }
   const blockedPlayers=new Set();
   function playbackPolicy() { window.dispatchEvent(new CustomEvent("camera-playback-policy",{detail:{blocked:blockedPlayers.size>0}})); }
   function resumePlayback() { for(const player of [...blockedPlayers])player.play(true); }
@@ -41,6 +60,7 @@
   class Player {
     constructor(stream,element) {
       this.stream=stream;this.element=element;this.queue=[];this.head=0;this.bytes=0;this.closed=false;this.offset=null;this.started=false;
+      this.policy=new BufferPolicy();this.hasPlayed=false;
       this.video=element.querySelector("video");this.events=new AbortController();
       this.video.defaultMuted=true;this.video.muted=true;this.video.autoplay=true;this.video.playsInline=true;this.video.disableRemotePlayback=true;this.video.controls=false;this.video.preload="auto";
       // WebKit evaluates autoplay visibility before the first decoded frame.
@@ -60,8 +80,11 @@
             this.pump();
           } catch { this.fail("Не удалось запустить видео в этом браузере"); }
         },{once:true});
-        this.video.addEventListener("loadeddata",()=>{captureFrame(this.element,true);this.play();},{once:true,signal:this.events.signal});
-        this.video.addEventListener("playing",()=>this.visible(),{signal:this.events.signal});
+        this.video.addEventListener("loadeddata",()=>{this.visible();captureFrame(this.element,true);this.play();},{once:true,signal:this.events.signal});
+        this.video.addEventListener("playing",()=>{this.hasPlayed=true;this.visible();},{signal:this.events.signal});
+        this.video.addEventListener("waiting",()=>{
+          if(!this.closed && this.hasPlayed && !this.policy.recovering){this.policy.stall();this.video.pause();}
+        },{signal:this.events.signal});
         this.video.addEventListener("timeupdate",()=>captureFrame(this.element),{signal:this.events.signal});
         this.video.addEventListener("error",()=>{if(!this.closed){console.warn("camera_media_error",{code:this.video.error?.code,detail:this.video.error?.message});this.fail("Восстанавливаем видео…");}},{signal:this.events.signal});
         this.enqueue(stream.init);
@@ -79,7 +102,7 @@
       }
     }
     play(gesture=false) {
-      if(this.closed || this.playPending || (!gesture && blockedPlayers.has(this)) || !this.video.paused)return;
+      if(this.closed || this.policy.recovering || this.playPending || (!gesture && blockedPlayers.has(this)) || !this.video.paused)return;
       this.video.muted=true;this.playPending=true;
       const result=this.video.play();
       if(!result) { this.playPending=false;return; }
@@ -99,10 +122,9 @@
         const ranges=this.buffer.buffered;
         if(ranges.length) {
           const start=ranges.start(ranges.length-1),end=ranges.end(ranges.length-1);
-          if(!this.started || end-this.video.currentTime>1.5 || this.video.currentTime<start) {
-            this.video.currentTime=Math.max(start,end-.25);this.started=true;
-          }
-          this.play();
+          const position=this.policy.position(start,end,this.video.currentTime,this.started);
+          if(position!==null){this.video.currentTime=position;this.started=true;}
+          if(this.policy.ready(end-this.video.currentTime))this.play();
           const earliest=ranges.start(0);
           if(end-earliest>8 && this.video.currentTime>earliest+4) { this.buffer.remove(earliest,this.video.currentTime-3);return; }
         }
@@ -147,6 +169,7 @@
     destroy() { this.releasePlayers();this.fragments=[];this.bytes=0; }
   }
   window.CameraStream=CameraStream;
+  CameraStream.BufferPolicy=BufferPolicy;
   window.captureCameraFrame=captureFrame;
   window.freezeCameraFrame=freezeFrame;
   window.resumeCameraPlayback=resumePlayback;
