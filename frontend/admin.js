@@ -1,6 +1,6 @@
 "use strict";
 
-const adminSections = {users:"Пользователи",invites:"Приглашения",groups:"Группы",cameras:"Камеры",connection:"Подключение"};
+const adminSections = {users:"Пользователи",invites:"Приглашения",groups:"Группы",cameras:"Камеры",archive:"Архив",connection:"Подключение"};
 let adminDraft = null, adminPicker = null;
 const quantity = (count, forms) => `${count} ${forms[count%100>=11 && count%100<=14 ? 2 : count%10===1 ? 0 : count%10>=2 && count%10<=4 ? 1 : 2]}`;
 const cameraCount = count => quantity(count,["камера","камеры","камер"]);
@@ -104,6 +104,7 @@ async function admin() {
   const body=content.querySelector("#admin-body");
   bindAdminHeader(body,`#/admin/${section}`);
   try {
+    if(section==="archive"){renderArchive(body);return;}
     if(item) { await adminEditor(body,section,item);return; }
     const create=section==="users" || section==="invites" ? `<button class="primary" id="new-invite" aria-label="Пригласить">${icon("plus")}<span>Пригласить</span></button>` : section==="groups" ? `<button class="icon-button primary" id="new-group" aria-label="Создать группу">${icon("plus")}</button>` : section==="cameras" ? `<button class="icon-button" id="sync" aria-label="Обновить список камер">${icon("refresh")}</button>` : "";
     let rows=[];
