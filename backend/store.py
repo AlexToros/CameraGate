@@ -105,6 +105,11 @@ class Store:
         with self.pool.connection() as conn:
             conn.execute('SELECT pg_advisory_xact_lock(802701)')
             conn.execute((DATABASE / 'schema.sql').read_text(), prepare=False)
+            conn.execute('CREATE TABLE IF NOT EXISTS schema_migrations (version text PRIMARY KEY)')
+            migration = '001_password_recovery.sql'
+            if not conn.execute('SELECT 1 FROM schema_migrations WHERE version=%s', (migration,)).fetchone():
+                conn.execute((DATABASE / 'migrations' / migration).read_text(), prepare=False)
+                conn.execute('INSERT INTO schema_migrations(version) VALUES (%s)', (migration,))
             self._prune_invitations(conn)
         self.refresh()
 
@@ -186,17 +191,56 @@ class Store:
 
     def login(self, data):
         login = login_name(data.get('login'))
-        with self.pool.connection() as conn:
-            user = conn.execute('SELECT id,password_hash,blocked FROM users WHERE login=%s', (login,)).fetchone()
-        matches = password_matches(data.get('password'), user['password_hash'] if user else self.dummy_hash)
-        if not matches or not user or user['blocked']:
-            raise Problem('Неверный логин или пароль', 401)
         def action(conn):
-            current = conn.execute('SELECT blocked FROM users WHERE id=%s', (user['id'],)).fetchone()
-            if current['blocked']:
-                raise Problem('Неверный логин или пароль', 401)
+            user = conn.execute('SELECT id,password_hash,blocked,failed_logins FROM users WHERE login=%s FOR UPDATE', (login,)).fetchone()
+            matches = password_matches(data.get('password'), user['password_hash'] if user else self.dummy_hash)
+            if not user:
+                return None
+            if user['blocked']:
+                return 'blocked'
+            if not matches:
+                attempts = min(3, user['failed_logins']+1)
+                conn.execute('UPDATE users SET failed_logins=%s,blocked=%s WHERE id=%s', (attempts, attempts == 3, user['id']))
+                if attempts == 3:
+                    conn.execute('DELETE FROM sessions WHERE user_id=%s', (user['id'],))
+                    return 'blocked'
+                return None
+            conn.execute('UPDATE users SET failed_logins=0 WHERE id=%s', (user['id'],))
             return self._session(conn, user['id'])
+        # Failed attempts must commit before returning an authentication error.
+        result = self.mutate(action)
+        if result == 'blocked':
+            raise Problem('Учётная запись заблокирована. Обратитесь к администратору', 401)
+        if not result:
+            raise Problem('Неверный логин или пароль', 401)
+        return result
+
+    def create_password_reset(self, actor, uid):
+        token = secrets.token_urlsafe(32)
+        def action(conn):
+            self._admin(conn, actor)
+            if not conn.execute('SELECT id FROM users WHERE id=%s', (uid,)).fetchone():
+                raise Problem('Пользователь не найден', 404)
+            conn.execute('DELETE FROM password_resets WHERE expires_at<=now() OR user_id=%s', (uid,))
+            conn.execute('INSERT INTO password_resets(user_id,token_hash,creator_id) VALUES (%s,%s,%s)', (uid, token_hash(token), actor))
+            return {'token': token}
         return self.mutate(action)
+
+    def reset_password(self, data):
+        token = data.get('token')
+        if not isinstance(token, str) or not 30 <= len(token) <= 100:
+            raise Problem('Ссылка недействительна или уже использована', 410)
+        hashed = password_hash(data.get('password'))
+        def action(conn):
+            row = conn.execute("SELECT r.user_id FROM password_resets r JOIN users u ON u.id=r.creator_id WHERE r.token_hash=%s AND r.expires_at>now() AND u.role='admin' AND NOT u.blocked FOR UPDATE OF r", (token_hash(token),)).fetchone()
+            if not row:
+                raise Problem('Ссылка недействительна или уже использована', 410)
+            uid = row['user_id']
+            # Password recovery clears automatic lockout, preserving an explicit admin block.
+            conn.execute('UPDATE users SET password_hash=%s,blocked=CASE WHEN failed_logins=3 THEN false ELSE blocked END,failed_logins=0 WHERE id=%s', (hashed, uid))
+            conn.execute('DELETE FROM sessions WHERE user_id=%s', (uid,))
+            conn.execute('DELETE FROM password_resets WHERE user_id=%s', (uid,))
+        self.mutate(action)
 
     def logout(self, token):
         self.mutate(lambda c: c.execute('DELETE FROM sessions WHERE token_hash=%s', (token_hash(token),)))
@@ -278,6 +322,7 @@ class Store:
                     raise Problem('Нельзя заблокировать или понизить последнего администратора', 409)
             conn.execute('UPDATE users SET first_name=%s,last_name=%s,role=%s,blocked=%s,camera_ids=%s,group_ids=%s WHERE id=%s',
                          (p['first_name'], p['last_name'], p['role'], blocked, p['camera_ids'], p['group_ids'], uid))
+            conn.execute('UPDATE users SET failed_logins=0 WHERE id=%s', (uid,))
             if blocked:
                 conn.execute('DELETE FROM sessions WHERE user_id=%s', (uid,))
         self.mutate(action)

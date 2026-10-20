@@ -9,7 +9,7 @@ RUN pip install --no-cache-dir -r requirements.txt \
  && useradd --uid 10001 --create-home viewer \
  && mkdir /data && chown viewer:viewer /data
 COPY backend/ ./backend/
-COPY database/schema.sql ./database/schema.sql
+COPY database/ ./database/
 COPY frontend/ ./frontend/
 USER viewer
 EXPOSE 8080

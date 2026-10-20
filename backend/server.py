@@ -151,6 +151,10 @@ class Portal:
         if path == '/api/invite/preview' and method == 'POST':
             self.throttle(request)
             return web.json_response(await self.call(self.store.preview_invite, data.get('token')))
+        if path == '/api/auth/reset' and method == 'POST':
+            self.throttle(request)
+            await self.call(self.store.reset_password, data)
+            return web.json_response({'ok': True})
         auth = {'/api/auth/setup':self.store.bootstrap, '/api/auth/login':self.store.login, '/api/auth/register':self.store.register}
         if path in auth and method == 'POST':
             self.throttle(request)
@@ -179,6 +183,9 @@ class Portal:
             return await self.archive.export.create(request,data,user)
         if path == '/api/admin/media/diagnostics' and method == 'GET':
             return web.json_response(self.streams.diagnostics() if hasattr(self.streams,'diagnostics') else {})
+        if path.startswith('/api/admin/users/') and path.endswith('/password-reset') and method == 'POST':
+            uid = numeric_tail(path.removesuffix('/password-reset'))
+            return web.json_response(await self.call(self.store.create_password_reset,user['id'],uid))
         if path.startswith('/api/admin/users/') and method == 'PUT':
             await self.call(self.store.edit_user,user['id'],numeric_tail(path),data)
         elif path == '/api/admin/invites' and method == 'GET':

@@ -69,6 +69,17 @@ function authView(mode, invitation, message = "") {
   const installButton = document.querySelector("#install");
   if (installButton) installButton.onclick = install;
 }
+function passwordResetView(token) {
+  root.innerHTML=`<main class="auth"><h1>Новый пароль</h1><form class="stack"><label>Пароль<input name="password" type="password" autocomplete="new-password" minlength="6" maxlength="128" required></label><label>Повторите пароль<input name="confirmation" type="password" autocomplete="new-password" minlength="6" maxlength="128" required></label><div class="error" role="alert"></div><button class="primary" type="submit">Сохранить</button></form></main>`;
+  const epoch=routeEpoch;
+  bindForm(root.querySelector('form'),async data=>{
+    if(data.password!==data.confirmation)throw new Error('Пароли не совпадают');
+    await api('/api/auth/reset','POST',{token,password:data.password});
+    if(epoch!==routeEpoch)return;
+    history.replaceState(null,'','/');activeLocation=location.hash;
+    authView('login',null,'Пароль изменён. Войдите с новым паролем.');
+  });
+}
 async function install() {
   if (installPrompt) { await installPrompt.prompt(); installPrompt = null; }
   else { const ios=/iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform==="MacIntel" && navigator.maxTouchPoints>1);toast(ios ? "«Поделиться» → «На экран Домой»" : "Меню браузера → «Установить приложение»"); }
@@ -84,6 +95,7 @@ async function boot() {
   if(modal.open) modal.close();
   root.innerHTML = `<main class="auth"><div class="brand-mark" aria-hidden="true">▦</div><h1>Домовые камеры</h1><p role="status">Открываем приложение…</p></main>`;
   try {
+    if(location.hash.startsWith('#/reset/')){passwordResetView(location.hash.slice(8));return;}
     const token = location.hash.startsWith("#/invite/") ? location.hash.slice(9) : null;
     if(token !== null) { const preview = await api("/api/invite/preview", "POST", {token}); if(epoch === routeEpoch) authView("invite", {...preview,token}); return; }
     try { await enter(epoch); return; }
@@ -135,7 +147,7 @@ async function navigateTo(hash) {
   finishAdminPicker();adminDraft=null;
   if(modal.open)modal.close();
   history.pushState(null,"",hash || "/");activeLocation=location.hash;
-  if(!me || location.hash.startsWith("#/invite/")){await boot();return;}
+  if(!me || (location.hash.startsWith("#/invite/") || location.hash.startsWith("#/reset/"))){await boot();return;}
   page=me.role==="admin" && location.hash.startsWith("#/admin") ? "admin" : "wall";
   render();window.scrollTo(0,0);
 }
@@ -145,7 +157,7 @@ async function locationChanged() {
   if(!mayLeaveAdmin()){history.pushState(null,"",activeLocation || "/");return;}
   activeLocation=location.hash;adminDraft=null;finishAdminPicker();
   await flushSave();
-  if(!me || location.hash.startsWith("#/invite/")){await boot();return;}
+  if(!me || (location.hash.startsWith("#/invite/") || location.hash.startsWith("#/reset/"))){await boot();return;}
   if(modal.open)modal.close();
   page=me.role==="admin" && location.hash.startsWith("#/admin") ? "admin" : "wall";
   render();window.scrollTo(0,0);

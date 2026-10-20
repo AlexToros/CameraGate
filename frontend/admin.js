@@ -207,8 +207,20 @@ async function adminEditor(body,section,item) {
   const draft=adminDraft, data=draft.data;
   const person=section==="users" || section==="invites";
   const fields=person ? `${section==="users" ? `<p class="muted">${h(value.login)}</p>` : ""}${personFields(data)}${section==="users" ? `<label class="switch-row"><span>Заблокирован</span><input type="checkbox" name="blocked" ${data.blocked ? "checked" : ""}></label>` : ""}${accessFields(data)}` : section==="groups" ? `<label>Название<input name="name" required maxlength="100" value="${h(data.name)}" ${value.builtin ? "readonly" : ""}></label>${extra}<div class="selection-summary"><button type="button" data-access="camera_ids"><span>Камеры</span><span data-summary="camera_ids">${cameraCount(data.camera_ids.length)}</span>${icon("chevron")}</button></div>` : section==="cameras" ? `<label>Название<input name="name" required maxlength="120" value="${h(data.name)}"></label>` : `${extra}<label>Cloud ID<input name="ID" required maxlength="128" autocomplete="off" autocapitalize="none" spellcheck="false"></label><label>Логин<input name="UserName" required maxlength="128" autocomplete="off" autocapitalize="none" spellcheck="false"></label><label>Пароль<input name="Password" type="password" required maxlength="256" autocomplete="new-password"></label>`;
-  body.innerHTML=`<form id="admin-edit-form" class="admin-editor" autocomplete="off"><header class="editor-head"><button type="button" class="editor-back icon-button" aria-label="Назад">${icon("back")}</button><h2>${h(title)}</h2><button class="primary" type="submit">${submit}</button></header><div class="form-fields stack">${fields}<div class="error" role="alert"></div></div></form>`;
+  body.innerHTML=`<form id="admin-edit-form" class="admin-editor" autocomplete="off"><header class="editor-head"><button type="button" class="editor-back icon-button" aria-label="Назад">${icon("back")}</button><h2>${h(title)}</h2><button class="primary" type="submit">${submit}</button></header><div class="form-fields stack">${fields}${section==="users" ? `<button type="button" class="password-reset">Ссылка для сброса пароля</button>` : ""}<div class="error" role="alert"></div></div></form>`;
   const form=body.querySelector("form");
+  const reset=form.querySelector('.password-reset');
+  if(reset)reset.onclick=async()=>{
+    reset.disabled=true;
+    try {
+      const result=await api(`/api/admin/users/${item}/password-reset`,'POST',{});
+      if(!form.isConnected)return;
+      const link=`${location.origin}/#/reset/${result.token}`;
+      dialog('Сброс пароля',`<p class="muted">Одноразовая ссылка действует сутки.</p><div class="invite-copy-row"><button type="button" class="invite-link">${h(link)}</button><button type="button" class="icon-button" id="copy-link" aria-label="Копировать ссылку">${icon('copy')}</button></div>`);
+      const copy=async()=>{try{await navigator.clipboard.writeText(link);toast('Ссылка скопирована');}catch{toast('Не удалось скопировать ссылку');}};
+      modal.querySelector('.invite-link').onclick=copy;modal.querySelector('#copy-link').onclick=copy;
+    }catch(error){if(form.isConnected)form.querySelector('.error').textContent=error.message;}finally{reset.disabled=false;}
+  };
   if(connectionStatus==="checking")followConnection(form);
   if(section==="connection")form.querySelectorAll("input").forEach(input=>input.value=data[input.name]);
   form.querySelector(".editor-back").onclick=()=>navigateTo(back);

@@ -115,6 +115,24 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         user,session = self.store.user(token)
         return user, {'Cookie':COOKIE+'='+token,'X-CSRF-Token':session['csrf']},session['csrf']
 
+    async def test_password_reset_requires_admin_csrf_and_rejects_expired_link(self):
+        user,headers,_ = await self.viewer()
+        path='/api/admin/users/%s/password-reset' % user['id']
+        self.assertEqual((await self.client.post(path,headers=headers,json={})).status,403)
+        self.assertEqual((await self.client.post(path,json={})).status,403)
+        response=await self.client.post(path,headers=self.headers,json={})
+        self.assertEqual(response.status,200)
+        token=(await response.json())['token']
+        with self.store.pool.connection() as conn:
+            conn.execute("UPDATE password_resets SET expires_at=now()-interval '1 second'")
+        response=await self.client.post('/api/auth/reset',json=dict(token=token,password='newpass'))
+        self.assertEqual(response.status,410)
+        response=await self.client.post(path,headers=self.headers,json={})
+        token=(await response.json())['token']
+        response=await self.client.post('/api/auth/reset',json=dict(token=token,password='newpass'))
+        self.assertEqual(response.status,200)
+        self.assertEqual((await self.client.get('/api/me',headers=headers)).status,401)
+
     async def test_archive_requires_admin_csrf_and_private_record_reference(self):
         archive=self.app[PORTAL].archive;recorder=archive.recorder=FakeRecorder()
         self.streams.config={'test':True}

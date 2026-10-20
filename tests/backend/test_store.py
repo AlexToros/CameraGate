@@ -68,6 +68,61 @@ class DatabaseCase(unittest.TestCase):
 
 
 class StoreTests(DatabaseCase):
+    def test_three_failures_lock_and_recovery_is_single_use(self):
+        admin,_ = self.admin()
+        self.store.sync_cameras(['One'])
+        user,session = self.invited(admin)
+        for attempt in range(3):
+            with self.assertRaises(Problem):
+                self.store.login(dict(login='user',password='wrong!'))
+            self.assertEqual(self.store.snapshot['users'][user['id']]['blocked'], attempt == 2)
+        with self.assertRaises(Problem):
+            self.store.user(session)
+        with self.assertRaises(Problem):
+            self.store.login(dict(login='user',password=PASSWORD))
+        old = self.store.create_password_reset(admin['id'],user['id'])['token']
+        token = self.store.create_password_reset(admin['id'],user['id'])['token']
+        with self.assertRaises(Problem):
+            self.store.reset_password(dict(token=old,password='newpass'))
+        self.store.reset_password(dict(token=token,password='newpass'))
+        self.assertFalse(self.store.snapshot['users'][user['id']]['blocked'])
+        with self.assertRaises(Problem):
+            self.store.reset_password(dict(token=token,password='another'))
+        self.store.user(self.store.login(dict(login='user',password='newpass')))
+
+    def test_success_resets_counter_and_manual_block_survives_recovery(self):
+        admin,_ = self.admin()
+        self.store.sync_cameras(['One'])
+        user,_ = self.invited(admin)
+        for _ in range(2):
+            with self.assertRaises(Problem):
+                self.store.login(dict(login='user',password='wrong!'))
+        self.store.login(dict(login='user',password=PASSWORD))
+        with self.assertRaises(Problem):
+            self.store.login(dict(login='user',password='wrong!'))
+        self.assertFalse(self.store.snapshot['users'][user['id']]['blocked'])
+        self.store.edit_user(admin['id'],user['id'],{**user,'blocked':True})
+        token=self.store.create_password_reset(admin['id'],user['id'])['token']
+        self.store.reset_password(dict(token=token,password='newpass'))
+        self.assertTrue(self.store.snapshot['users'][user['id']]['blocked'])
+
+    def test_concurrent_failures_and_concurrent_recovery(self):
+        admin,_ = self.admin()
+        self.store.sync_cameras(['One'])
+        user,_ = self.invited(admin)
+        def fail(_):
+            try:self.store.login(dict(login='user',password='wrong!'))
+            except Problem:return True
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            self.assertEqual(list(executor.map(fail,range(3))),[True]*3)
+        self.assertTrue(self.store.snapshot['users'][user['id']]['blocked'])
+        token=self.store.create_password_reset(admin['id'],user['id'])['token']
+        def reset(_):
+            try:self.store.reset_password(dict(token=token,password='newpass'));return True
+            except Problem:return False
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            self.assertEqual(sorted(executor.map(reset,range(2))),[False,True])
+
     def test_all_cameras_group_is_editable_without_limiting_admin_catalog(self):
         admin,_ = self.admin()
         self.store.sync_cameras(['One','Two','Three'])
