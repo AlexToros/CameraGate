@@ -83,7 +83,11 @@
         this.video.addEventListener("loadeddata",()=>{this.visible();captureFrame(this.element,true);this.play();},{once:true,signal:this.events.signal});
         this.video.addEventListener("playing",()=>{this.hasPlayed=true;this.visible();},{signal:this.events.signal});
         this.video.addEventListener("waiting",()=>{
-          if(!this.closed && this.hasPlayed && !this.policy.recovering){this.policy.stall();this.video.pause();}
+          const ranges=this.video.buffered,last=ranges.length-1;
+          const ahead=last>=0 && this.video.currentTime>=ranges.start(last) ? ranges.end(last)-this.video.currentTime : 0;
+          // waiting also fires during seeks/decoder transitions with data still
+          // available. Only starvation should deliberately pause for refill.
+          if(!this.closed && this.hasPlayed && !this.video.seeking && this.video.readyState<3 && ahead<.35 && !this.policy.recovering){this.policy.stall();this.video.pause();}
         },{signal:this.events.signal});
         this.video.addEventListener("timeupdate",()=>captureFrame(this.element),{signal:this.events.signal});
         this.video.addEventListener("error",()=>{if(!this.closed){console.warn("camera_media_error",{code:this.video.error?.code,detail:this.video.error?.message});this.fail("Восстанавливаем видео…");}},{signal:this.events.signal});

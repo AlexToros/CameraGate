@@ -14,7 +14,10 @@ const temp=fs.mkdtempSync(path.join(os.tmpdir(),'cameragate-startup-')),sample=p
  await page.evaluate(frames=>{for(const frame of frames)stream.receive(2,Uint8Array.from(frame));},frames.slice(1,11).map(b=>[...b]));
  await page.evaluate(()=>new Promise(resolve=>{const player=[...stream.players.values()][0];function flushed(){if(!player.bytes && !player.buffer.updating)return resolve();player.buffer.addEventListener('updateend',flushed,{once:true});}flushed();}));
  await page.locator('video').evaluate(v=>v.play());
- await page.locator('video').evaluate(v=>new Promise(resolve=>{if(v.paused)return resolve();v.addEventListener('pause',resolve,{once:true});}));
+ await page.locator('video').evaluate(v=>new Promise(resolve=>{if(!v.seeking)return resolve();v.addEventListener('seeked',resolve,{once:true});}));
+ await page.locator('video').evaluate(v=>v.dispatchEvent(new Event('waiting')));
+ assert.equal(await page.evaluate(()=>[...stream.players.values()][0].policy.recovering),false); // data is available: not starvation
+ await page.locator('video').evaluate(v=>new Promise((resolve,reject)=>{if(v.paused)return resolve();const timer=setTimeout(()=>reject(new Error(JSON.stringify({time:v.currentTime,seeking:v.seeking,ready:v.readyState,paused:v.paused,policy:[...stream.players.values()][0].policy}))),10000);v.addEventListener('pause',()=>{clearTimeout(timer);resolve();},{once:true});}));
  assert.equal(await page.evaluate(()=>[...stream.players.values()][0].policy.recovering),true);
  await page.evaluate(frame=>stream.receive(2,Uint8Array.from(frame)),[...frames[11]]);
  assert.equal(await page.locator('video').evaluate(v=>v.paused),true);
