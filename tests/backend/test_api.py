@@ -445,6 +445,32 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(error.exception.status, 403)
 
 
+
+    async def test_hd_selection_requires_physical_camera_grant_and_revokes_with_it(self):
+        self.streams.config={'test':True}
+        viewer,headers,viewer_csrf=await self.viewer()
+        ws=await self.client.ws_connect('/api/live',headers=headers)
+        await ws.send_json(dict(csrf=viewer_csrf,camera_ids=[1],hd_camera_id=1,audio_camera_id=1,audio_hd=True))
+        status=await ws.receive_json(timeout=3)
+        self.assertEqual(set(status['cameras']),{'1','257'})
+        self.assertEqual(set(self.streams.sources),{1,257})
+        # An upstream source ID is never accepted as a camera grant.
+        bad=await self.client.ws_connect('/api/live',headers=headers)
+        await bad.send_json(dict(csrf=viewer_csrf,camera_ids=[257],hd_camera_id=257))
+        self.assertEqual((await bad.receive(timeout=3)).data,4403)
+        bad=await self.client.ws_connect('/api/live',headers=headers)
+        await bad.send_json(dict(csrf=viewer_csrf,camera_ids=[1],hd_camera_id=2))
+        self.assertEqual((await bad.receive(timeout=3)).data,4403)
+        user=self.store.snapshot['users'][viewer['id']]
+        await asyncio.to_thread(self.store.edit_user,self.me['user']['id'],user['id'],dict(first_name=user['first_name'],last_name=user['last_name'],role='user',blocked=False,camera_ids=[],group_ids=[]))
+        for _ in range(8):
+            message=await ws.receive(timeout=3)
+            if message.type==WSMsgType.TEXT and 'revoked' in message.data:
+                self.assertEqual(__import__('json').loads(message.data)['camera_ids'],[1]);break
+        else:self.fail('Revocation not delivered')
+        self.assertEqual((await ws.receive_json(timeout=3))['cameras'],{})
+        await ws.close()
+
     async def export_record(self, recorder=None):
         archive=self.app[PORTAL].archive
         archive.recorder=recorder or FakeRecorder()

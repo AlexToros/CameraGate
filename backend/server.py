@@ -18,6 +18,7 @@ from .cameras.streams import make_pool
 from .cameras.relay import pack_encoded, pack_audio
 from .paths import ROOT, FRONTEND
 from .archive import Archive
+from .cameras.profiles import hd_source
 
 COOKIE = 'viewer_session'
 LOG = logging.getLogger('portal')
@@ -221,10 +222,12 @@ class Portal:
         motion_status = None
         authenticated = False
         audio_camera = None
+        hd_camera = None
+        audio_hd = False
         audio_sent = {}
 
         async def receive():
-            nonlocal selected, authenticated, audio_camera
+            nonlocal selected, authenticated, audio_camera, hd_camera, audio_hd
             async for message in ws:
                 if message.type != WSMsgType.TEXT:
                     break
@@ -239,11 +242,19 @@ class Portal:
                     audio_id = data.get('audio_camera_id')
                     if audio_id is not None and (type(audio_id) is not int or audio_id not in values):
                         raise Problem('Нет доступа к звуку камеры',403)
-                    if audio_id != audio_camera:
+                    hd_id=data.get('hd_camera_id')
+                    if hd_id is not None and (type(hd_id) is not int or hd_id not in values):
+                        raise Problem('Нет доступа к HD камеры',403)
+                    use_hd=data.get('audio_hd',False)
+                    if type(use_hd) is not bool or (use_hd and (audio_id is None or audio_id!=hd_id)):
+                        raise Problem('Нет доступа к звуку камеры',403)
+                    if audio_id != audio_camera or use_hd!=audio_hd:
                         audio_sent.clear()
                     audio_camera = audio_id
+                    hd_camera,audio_hd=hd_id,use_hd
                     selected = set(values)
-                    for cid in sent.keys() - selected:
+                    source_ids=selected | ({hd_source(hd_camera)} if hd_camera is not None else set())
+                    for cid in sent.keys() - source_ids:
                         sent.pop(cid)
                     authenticated = True
                 except (ValueError, TypeError, Problem):
@@ -264,17 +275,21 @@ class Portal:
                     selected -= denied
                     if audio_camera in denied:
                         audio_camera = None; audio_sent.clear()
+                    if hd_camera in denied:
+                        hd_camera=None;audio_hd=False
                     await ws.send_json(dict(type='revoked',camera_ids=sorted(denied)))
                 if not authenticated and time.monotonic()-started>10:
                     await ws.close(code=4403)
                     break
                 if authenticated and self.streams.config:
-                    sources = self.streams.subscribe(selected)
+                    source_ids=selected | ({hd_source(hd_camera)} if hd_camera is not None else set())
+                    sources = self.streams.subscribe(source_ids)
                     # In-memory traversal only. The socket emits one bounded batch
                     # of latest frames; slow readers never accumulate video history.
                     state, payload = pack_encoded(sources,sent)
-                    if audio_camera in sources:
-                        payload += pack_audio({audio_camera:sources[audio_camera]},audio_sent)
+                    audio_source=hd_source(audio_camera) if audio_hd and audio_camera is not None else audio_camera
+                    if audio_source in sources:
+                        payload += pack_audio({audio_source:sources[audio_source]},audio_sent)
                     if state != statuses:
                         statuses = state
                         await asyncio.wait_for(ws.send_json(dict(type='status',cameras=state)),5)

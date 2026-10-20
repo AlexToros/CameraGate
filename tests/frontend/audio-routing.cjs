@@ -10,6 +10,7 @@ function run(count) {
  const streams=new Map(tiles.map(t=>[t.camera_id,{players:new Map([[elements[0],player]]),receive:(kind,data)=>video.push([t.camera_id,kind,data])}]));
  const scope={WebSocket:Socket,stopVideo(){},me:{},page:'wall',document:{hidden:false,querySelectorAll(){queries++;return elements;}},socketEpoch:1,
    location:{protocol:'http:',host:'localhost'},state:{layout:{tiles}},subscribe(){},subscriptions(){subscriptions++;return tiles.map(t=>t.camera_id);},
+   sourceSubscriptions(){return scope.subscriptions();},audioSourceId(){return 1;},HD_OFFSET:256,hdSelection:null,
    mediaStreams:streams,audioSelection:{cid:1,element:elements[0]},cameraAudio:{receive:(data,p)=>received.push([data,p])},drawCached:(tile)=>drawn.push(tile.camera_id),
    DataView,Uint8Array,TextDecoder,console};
  vm.createContext(scope);vm.runInContext(handler+';connectVideo();',scope);

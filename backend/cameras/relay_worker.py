@@ -23,6 +23,7 @@ from ..paths import ROOT
 from .session import SharedSession, SessionChanged
 from .mp4 import Muxer, parameter_sets, ReorderedStream
 from .vesta import Transport, Frames, discover
+from .profiles import HD_OFFSET, source_camera
 
 
 class Outbox:
@@ -70,6 +71,8 @@ def reconcile_channels(channels, selected, create):
 class Channel:
     def __init__(self, cid, token, hub, config, outbox, connecting, initializing, session):
         self.cid, self.hub, self.config = cid, hub, config
+        self.camera=source_camera(cid)
+        self.profile='Main' if cid>HD_OFFSET else 'Extra1'
         self.token = token
         self.outbox, self.connecting, self.initializing = outbox, connecting, initializing
         self.session=session
@@ -95,11 +98,11 @@ class Channel:
                     if self.stop.is_set():
                         return
                     transport = Transport(None, self.config['SERIAL_NUM'], hub=self.hub)
-                    transport.event_channel=self.cid
+                    transport.event_channel=self.camera
                     transport.session=lease.transport.session
                     stage = 'claim'
-                    transport.monitor(self.cid-1, 'Claim', 1413)
-                    self.session.send(lease,1410,transport.monitor_command(self.cid-1,'Start'))
+                    transport.monitor(self.camera-1, 'Claim', 1413,stream=self.profile)
+                    self.session.send(lease,1410,transport.monitor_command(self.camera-1,'Start',stream=self.profile))
                     monitoring=True
                 stage = 'media'
                 frames, muxer, audio_clock = Frames(), None, AudioClock()
@@ -158,7 +161,7 @@ class Channel:
             finally:
                 if transport:
                     if monitoring and self.session.is_current(lease):
-                        try:self.session.send(lease,1410,transport.monitor_command(self.cid-1,'Stop'))
+                        try:self.session.send(lease,1410,transport.monitor_command(self.camera-1,'Stop',stream=self.profile))
                         except (ConnectionError,OSError):pass
                     transport.close()
             self.stop.wait(delay)
@@ -210,12 +213,12 @@ def main():
             try:
                 update=json.loads(line)
                 ids = update['camera_ids']
-                if not isinstance(ids,list) or len(ids)>256 or any(type(cid) is not int or not 1<=cid<=256 for cid in ids):
+                if not isinstance(ids,list) or len(ids)>512 or any(type(cid) is not int or not 1<=cid<=512 for cid in ids):
                     raise ValueError()
                 with condition:
                     priority=update.get('priority_ids',[])
                     selected_ids=set(ids)
-                    if not isinstance(priority,list) or len(priority)>256 or any(type(cid) is not int or cid not in selected_ids for cid in priority):
+                    if not isinstance(priority,list) or len(priority)>512 or any(type(cid) is not int or cid not in selected_ids for cid in priority):
                         raise ValueError()
                     connecting.prioritize(priority)
                     tokens = update.get('tokens',{})

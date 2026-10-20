@@ -102,6 +102,22 @@ class FragmentsTests(unittest.TestCase):
 
 
 class ContinuousPoolTests(unittest.IsolatedAsyncioTestCase):
+    async def test_hd_is_shared_on_demand_and_expires_without_stopping_persistent_sd(self):
+        pool=RelayPool({'test':True})
+        try:
+            with patch.object(pool,'run',side_effect=asyncio.Event().wait):
+                with patch('backend.cameras.relay.time.monotonic',return_value=100):
+                    pool.maintain([1,2])
+                    one=pool.subscribe([1,257]);two=pool.subscribe([1,257])
+                    self.assertIs(one[257],two[257]);self.assertEqual(set(pool.sources),{1,2,257})
+                with patch('backend.cameras.relay.time.monotonic',return_value=102):
+                    pool.subscribe([257]);pool.prune();self.assertIn(257,pool.sources)
+                with patch('backend.cameras.relay.time.monotonic',return_value=104):
+                    pool.prune();self.assertIn(257,pool.sources)
+                with patch('backend.cameras.relay.time.monotonic',return_value=105):
+                    pool.prune();self.assertEqual(set(pool.sources),{1,2})
+        finally:await pool.close()
+
     async def test_visible_demands_merge_without_promoting_background_sources(self):
         pool=RelayPool({'test':True})
         try:

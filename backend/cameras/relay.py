@@ -8,6 +8,7 @@ import time
 import uuid
 
 from .audio import MAX_AUDIO
+from .profiles import HD_OFFSET, source_camera
 from .streams import worker_command, terminate
 from ..paths import ROOT
 
@@ -169,7 +170,7 @@ class RelayPool:
         now=time.monotonic()
         return dict(session=self.session_details.copy(),event_log=self.event_log_details.copy(),motion=dict(**self.motion_details,available=self.motion(set(self.sources))['available'],
             active_camera_ids=sorted(self.motion_ids),snapshot_age=round(now-self.motion_at,2) if self.motion_at else None),
-            sources=[dict(camera_id=cid,state=s.state,frame_age=round(now-s.last_frame,3) if s.last_frame else None,
+            sources=[dict(camera_id=source_camera(cid),profile='Main' if cid>HD_OFFSET else 'Extra1',state=s.state,frame_age=round(now-s.last_frame,3) if s.last_frame else None,
                 received_frames=s.received_frames,received_bytes=s.received_bytes,arrival_gaps=s.arrival_gaps,
                 max_arrival_gap=round(s.max_arrival_gap,3),max_ipc_delay=round(s.max_ipc_delay,4) if s.ipc_samples else None,max_sdk_gap=round(s.max_sdk_gap,3),fps=s.fps,cache_bytes=s.size,
                 initializations=s.initializations,init_reason=s.init_reason,max_initialization_ms=s.max_initialization_ms) for cid,s in self.sources.items()])
@@ -207,7 +208,7 @@ class RelayPool:
 
     def prune(self):
         now = time.monotonic()
-        expired = [cid for cid,s in self.sources.items() if cid not in self.persistent and now-s.touched>=15]
+        expired = [cid for cid,s in self.sources.items() if cid not in self.persistent and now-s.touched>=(3 if cid>HD_OFFSET else 15)]
         for cid in expired:
             source = self.sources.pop(cid)
             self.cache_bytes -= source.size+len(source.init)

@@ -47,7 +47,7 @@ class FakeMedia:
     def login(self,*args,**kwargs):raise AssertionError('Media must reuse the authenticated session')
     def command(self,name):return {'Name':name,'SessionID':'0x%08x'%self.session}
     monitor_command=Transport.monitor_command
-    def monitor(self,channel,action,mid):self.claims.append((channel,action,mid,self.session))
+    def monitor(self,channel,action,mid,stream='Extra1'):self.claims.append((channel,action,mid,self.session))
     def receive(self,timeout):threading.Event().wait(.01);raise queue.Empty()
     def close(self):self.closed=True
 
@@ -57,6 +57,28 @@ class SharedSessionTests(unittest.TestCase):
         FakeControl.count=0;FakeMedia.all=[];self.stop=threading.Event();self.out=Output();self.gate=ConnectionGate(2)
         self.owner=SharedSession(object(),{'SERIAL_NUM':'test'},self.stop,self.gate,self.out)
     def tearDown(self):self.stop.set();self.owner.close();self.gate.close()
+
+    def test_sd_and_hd_share_login_but_stop_only_their_own_profile(self):
+        with patch('backend.cameras.session.Transport',FakeControl),patch('backend.cameras.relay_worker.Transport',FakeMedia):
+            self.owner.start();lease=self.owner.wait(self.stop)
+            channels=[Channel(cid,'token',object(),{'SERIAL_NUM':'test'},self.out,self.gate,threading.Semaphore(),self.owner) for cid in (1,257)]
+            try:
+                # Wait on observed Start commands, never a wall-clock assertion.
+                for channel in channels:
+                    for _ in range(100):
+                        if any(mid==1410 and value['OPMonitor']['Action']=='Start' and value['OPMonitor']['Parameter']['StreamType']==channel.profile for mid,value in lease.transport.sent):break
+                        threading.Event().wait(.01)
+                self.assertEqual(FakeControl.count,1)
+                starts=[value['OPMonitor']['Parameter'] for mid,value in lease.transport.sent if mid==1410 and value['OPMonitor']['Action']=='Start']
+                self.assertEqual({p['StreamType'] for p in starts},{'Extra1','Main'})
+                self.assertEqual({p['Channel'] for p in starts},{0})
+                channels[1].stop.set();channels[1].thread.join(timeout=5)
+                self.assertTrue(channels[0].thread.is_alive())
+                stops=[value['OPMonitor']['Parameter'] for mid,value in lease.transport.sent if mid==1410 and value['OPMonitor']['Action']=='Stop']
+                self.assertEqual(stops,[dict(Channel=0,CombinMode='NONE',StreamType='Main',TransMode='TCP')])
+            finally:
+                for channel in channels:channel.stop.set()
+                for channel in channels:channel.thread.join(timeout=5)
 
     def test_four_sources_share_one_login_and_control_start_stop(self):
         with patch('backend.cameras.session.Transport',FakeControl),patch('backend.cameras.relay_worker.Transport',FakeMedia):

@@ -287,15 +287,17 @@ class Transport:
     def command(self, name):
         return {'Name': name, 'SessionID': '0x%08x' % self.session}
 
-    def monitor_command(self, channel, action):
+    def monitor_command(self, channel, action, stream='Extra1'):
+        if stream not in ('Extra1','Main'):
+            raise ValueError('Unsupported monitor profile')
         payload = self.command('OPMonitor')
         payload['OPMonitor'] = {'Action': action, 'Parameter': {
             'Channel': channel, 'CombinMode': 'NONE',
-            'StreamType': 'Extra1', 'TransMode': 'TCP'}}
+            'StreamType': stream, 'TransMode': 'TCP'}}
         return payload
 
-    def monitor(self, channel, action, mid):
-        payload=self.monitor_command(channel,action)
+    def monitor(self, channel, action, mid, stream='Extra1'):
+        payload=self.monitor_command(channel,action,stream)
         if action in ('Start', 'Stop'):
             self.send(mid, payload)
             return

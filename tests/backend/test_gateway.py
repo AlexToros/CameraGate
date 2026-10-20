@@ -17,6 +17,24 @@ from tests.backend.test_api import FakeRecorder
 
 
 class GatewayTests(unittest.IsolatedAsyncioTestCase):
+    async def test_gateway_forwards_sd_and_hd_as_distinct_shared_sources(self):
+        token=secrets.token_urlsafe(48);upstream=FakeStreams()
+        client=TestClient(TestServer(gateway_app(token,upstream)));await client.start_server()
+        try:
+            ws=await client.ws_connect('/live',headers={'Authorization':'Bearer '+token})
+            await ws.send_json(dict(config=dict(SERIAL_NUM='test',USERNAME='test',PASSWORD='test')))
+            await ws.send_json(dict(camera_ids=[1,257],priority_camera_ids=[257],persistent_camera_ids=[1],audio_camera_ids=[257]))
+            for _ in range(10):
+                message=await ws.receive(timeout=3)
+                if message.type==__import__('aiohttp').WSMsgType.TEXT:
+                    states=__import__('json').loads(message.data).get('cameras',{})
+                    if '257' in states:break
+            self.assertEqual(set(states),{'1','257'})
+            self.assertEqual(upstream.priority_ids,{257});self.assertEqual(upstream.persistent,{1})
+            self.assertEqual(set(upstream.sources),{1,257})
+            await ws.close()
+        finally:await client.close()
+
     async def test_gateway_auth_and_multiplexed_transport(self):
         token = secrets.token_urlsafe(48)
         upstream = FakeStreams()

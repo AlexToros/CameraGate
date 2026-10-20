@@ -3,6 +3,8 @@ const root = document.querySelector("#app"), modal = document.querySelector("#mo
 const h = value => String(value ?? "").replace(/[&<>"\x27]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","\x27":"&#39;"}[c]));
 let me, csrf, state, page = "wall", socket, socketEpoch = 0, saveTimer, saving = Promise.resolve(), refreshTimer, installPrompt, reconnectTimer;
 const mediaStreams = new Map();
+const HD_OFFSET=256;
+let hdSelection=null;
 let movingCameras = new Set();
 function showMotion(ids=[]) {
   movingCameras = new Set(ids);
@@ -42,7 +44,7 @@ function bindForm(form, submit) {
 }
 function dialog(title, body, kind="sheet") { modal.className=`dialog-${kind}`;modal.setAttribute("aria-label",title); modal.innerHTML = `<header class="dialog-head"><h2>${h(title)}</h2><button class="close icon-button" aria-label="Закрыть">×</button></header><div class="dialog-content">${body}</div>`; if(kind==="picker")modal.querySelector(".dialog-head").append(modal.querySelector(".camera-filters"));modal.querySelector(".close").onclick = () => modal.close(); modal.showModal(); }
 modal.addEventListener("click", event => { if (event.target === modal) { const rect = modal.getBoundingClientRect(); if(event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) modal.close(); } });
-function stopVideo() {stopArchive();showMotion();stopCameraAudio(true);clearTimeout(reconnectTimer);socketEpoch++;if(socket)socket.close();socket=null;if(cameraFullscreen){cameraFullscreen.classList.remove("video-expanded");if(document.fullscreenElement===cameraFullscreen)document.exitFullscreen().catch(()=>{});cameraFullscreen=null;}for(const stream of mediaStreams.values())stream.destroy();mediaStreams.clear(); }
+function stopVideo() {hdSelection=null;stopArchive();showMotion();stopCameraAudio(true);clearTimeout(reconnectTimer);socketEpoch++;if(socket)socket.close();socket=null;if(cameraFullscreen){cameraFullscreen.classList.remove("video-expanded");if(document.fullscreenElement===cameraFullscreen)document.exitFullscreen().catch(()=>{});cameraFullscreen=null;}for(const stream of mediaStreams.values())stream.destroy();mediaStreams.clear(); }
 function signedOut(message) { stopWallReorder(); toggleAdminMenu(false);adminDraft=null;finishAdminPicker();root.classList.remove("editing");routeEpoch++; tileObserver?.disconnect(); me = null; csrf = null; state = null; clearInterval(refreshTimer); clearTimeout(saveTimer); stopVideo(); if(modal.open) modal.close(); authView("login", null, message); }
 function authView(mode, invitation, message = "") {
   const setup = mode === "setup", invite = mode === "invite";
@@ -192,6 +194,7 @@ function gridOptions() {
 function renderTiles() {
   const wall = document.querySelector("#wall"); if(!wall) return;
   stopWallReorder();
+  if(hdSelection)finishCameraFullscreen();
   const audible=audioSelection && (state.layout.tiles.find(tile=>tile.id===audioSelection.tileId && tile.camera_id===audioSelection.cid) || state.layout.tiles.find(tile=>tile.camera_id===audioSelection.cid));
   if(audioSelection && !audible)stopCameraAudio();
   tileObserver?.disconnect();
@@ -211,6 +214,7 @@ function renderTiles() {
     const spans = entries.map(entry => ({element:entry.target,rows:Math.ceil(((entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height)+gap)/(2+gap))}));
     spans.forEach(({element,rows}) => element.style.gridRowEnd = `span ${rows}`);
   });
+  let audioChanged=false;
   wall.querySelectorAll(".tile").forEach(element => {
     const tile = tilesById.get(element.dataset.tile);
     if(audible?.id===tile.id){Object.assign(audioSelection,{tileId:tile.id,element});cameraAudio.bindVideo(element.querySelector('video'));}
@@ -223,9 +227,10 @@ function renderTiles() {
     element.querySelector(".tile-expand").onclick = () => tile.camera_id ? expandCamera(element) : chooseCamera(tile);
     element.querySelector(".picture").ondblclick = event => { if(tile.camera_id && !event.target.closest("button")) expandCamera(element); };
     tileObserver.observe(element);
-    drawCached(tile,element);
+    audioChanged=drawCached(tile,element) || audioChanged;
   });
   audioButtons();
+  if(audioChanged)subscribe();
   stopWallReorder=enableWallReorder(wall,ids=>{
     state.layout.tiles=ids.map(id=>tilesById.get(id));
     const nodes=new Map([...wall.querySelectorAll('.tile')].map(element=>[element.dataset.tile,element]));
@@ -274,16 +279,24 @@ function tileOptions(tile) {
   bindForm(modal.querySelector("form"), data => { tile.width = +data.width; tile.height = 1; const index = state.layout.tiles.indexOf(tile); state.layout.tiles.splice(index,1); state.layout.tiles.splice(+data.position-1,0,tile); modal.close(); renderTiles(); changed(); });
 }
 async function expandCamera(element) {
-  const picture=element.querySelector(".picture"),video=picture.querySelector("video");
+  const picture=element.querySelector(".picture");
   if(document.fullscreenElement===picture) { await document.exitFullscreen();return; }
-  if(picture.classList.contains("video-expanded")) { picture.classList.remove("video-expanded");cameraFullscreen=null;return; }
+  if(picture.classList.contains("video-expanded")) { picture.classList.remove("video-expanded");finishCameraFullscreen();return; }
   cameraFullscreen=picture;
+  const tile=state.layout.tiles.find(tile=>tile.id===element.dataset.tile);
+  hdSelection={cid:tile.camera_id,element};subscribe();
   try {
     if(picture.requestFullscreen) await picture.requestFullscreen({navigationUI:"hide"});
-    else if(video.webkitEnterFullscreen) {
-      video.addEventListener("webkitendfullscreen",()=>{cameraFullscreen=null;},{once:true});video.webkitEnterFullscreen();
-    } else picture.classList.add("video-expanded");
+    // iPhone's native video fullscreen owns its media presentation. Keep
+    // our picture/controls when replacing MSE sources between SD and Main.
+    else picture.classList.add("video-expanded");
   } catch { picture.classList.add("video-expanded"); }
+}
+function finishCameraFullscreen() {
+  const selected=hdSelection,picture=cameraFullscreen;hdSelection=null;cameraFullscreen=null;
+  picture?.classList.remove('video-expanded');
+  if(picture && document.fullscreenElement===picture)document.exitFullscreen().catch(()=>{});
+  if(selected?.element.isConnected){drawCached({camera_id:selected.cid},selected.element);subscribe();}
 }
 function changed() { clearTimeout(saveTimer); saveTimer = setTimeout(save,500); }
 function save() {
@@ -320,18 +333,26 @@ function reconcileAudioSelection() {
   const tile=state.layout.tiles.find(tile=>tile.id===audioSelection.tileId);
   if(!tile || tile.camera_id!==audioSelection.cid || !audioSelection.element.isConnected){stopCameraAudio();}
 }
-function clearTile(element) { if(audioSelection?.element===element)cameraAudio.reset();const saved=freezeCameraFrame(element);if(element.cameraStream)element.cameraStream.detach(element);element.cameraStream=null;const video=element.querySelector("video");if(video){video.pause();video.removeAttribute("src");video.load();video.hidden=true;}element.querySelector(".stream-state").textContent=saved ? "Восстанавливаем эфир" : "Подключение…"; }
+function clearTile(element) { if(audioSelection?.element===element)cameraAudio.reset();const saved=freezeCameraFrame(element);if(element.cameraStream)element.cameraStream.detach(element);element.cameraStream=null;element.sourceId=null;const video=element.querySelector("video");if(video){video.pause();video.removeAttribute("src");video.load();video.hidden=true;}element.querySelector(".stream-state").textContent=saved ? "Восстанавливаем эфир" : "Подключение…"; }
 function drawCached(tile, element) {
-  const stream=mediaStreams.get(tile.camera_id);if(!stream)return;
+  const high=hdSelection?.element===element ? mediaStreams.get(tile.camera_id+HD_OFFSET) : null;
+  const sourceId=high?.fragments.length && Date.now()-high.lastFrame<5000 ? tile.camera_id+HD_OFFSET : tile.camera_id;
+  const stream=mediaStreams.get(sourceId);if(!stream)return;
+  const changed=element.cameraStream!==stream;
   if(element.cameraStream && element.cameraStream!==stream)clearTile(element);
-  element.cameraStream=stream;stream.attach(element);
+  element.cameraStream=stream;element.sourceId=sourceId;stream.attach(element);
+  if(changed && audioSelection?.element===element){cameraAudio.reset();return true;}
+  return false;
 }
 function subscriptions() { return [...new Set(state.layout.tiles.map(t => t.camera_id).filter(Boolean))]; }
+function sourceSubscriptions() {const ids=subscriptions();if(hdSelection)ids.push(hdSelection.cid+HD_OFFSET);return ids;}
+function audioSourceId() {return audioSelection ? audioSelection.element.sourceId || audioSelection.cid : null;}
 function subscribe() {
   reconcileAudioSelection();
-  const active = new Set(subscriptions());
+  const camera_ids=subscriptions(),active=new Set(camera_ids);
+  if(hdSelection)active.add(hdSelection.cid+HD_OFFSET);
   for(const [cid,stream] of mediaStreams) if(!active.has(cid)) { stream.destroy(); mediaStreams.delete(cid); }
-  if(socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({csrf,camera_ids:[...active],audio_camera_id:audioSelection?.cid ?? null}));
+  if(socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({csrf,camera_ids,hd_camera_id:hdSelection?.cid ?? null,audio_camera_id:audioSelection?.cid ?? null,audio_hd:audioSourceId()>HD_OFFSET}));
 }
 function connectVideo() {
   stopVideo(); if(!me || page !== "wall" || document.hidden) return;
@@ -345,7 +366,9 @@ function connectVideo() {
       if(message.type === "revoked") { const denied = new Set(message.camera_ids); for(const tile of state.layout.tiles) if(denied.has(tile.camera_id)) tile.camera_id = null; renderTiles(); subscribe(); refresh(); toast("Права доступа к камерам изменились"); }
       if(message.type === "status") {
         const tiles = new Map(state.layout.tiles.map(t => [t.id,t]));
-        document.querySelectorAll(".tile").forEach(element => { const cid = tiles.get(element.dataset.tile)?.camera_id, status = message.cameras[cid]; if(status && status !== "Прямой эфир") { clearTile(element); element.querySelector(".stream-state").textContent = status; } });
+        let audioChanged=false;
+        document.querySelectorAll(".tile").forEach(element => { const tile=tiles.get(element.dataset.tile),sid=element.sourceId || tile?.camera_id,status=message.cameras[sid]; if(status && status!=="Прямой эфир") { if(sid>HD_OFFSET){mediaStreams.get(sid)?.destroy();audioChanged=drawCached(tile,element) || audioChanged;}else{clearTile(element);element.querySelector(".stream-state").textContent=status;} } });
+        if(audioChanged)subscribe();
       }
       return;
     }
@@ -359,14 +382,19 @@ function connectVideo() {
         // Audio is consumed synchronously: borrow the packet bytes and leave
         // the video wall untouched, including on audio-only socket messages.
         if(kind===4) {
-          if(audioSelection?.cid===cid)cameraAudio.receive(new Uint8Array(event.data,offset,length),mediaStreams.get(cid)?.players.get(audioSelection.element));
-        } else if((active ??= new Set(subscriptions())).has(cid)) {
+          if(audioSelection && audioSourceId()===cid)cameraAudio.receive(new Uint8Array(event.data,offset,length),mediaStreams.get(cid)?.players.get(audioSelection.element));
+        } else if((active ??= new Set(sourceSubscriptions())).has(cid)) {
           const data=new Uint8Array(event.data.slice(offset,offset+length));
           if(kind===1) {
             const size=new DataView(data.buffer).getUint16(0);if(size>256 || size+2>=data.length)throw new Error("Неверный формат видео");
-            if(audioSelection?.cid===cid)cameraAudio.reset();
+            if(audioSourceId()===cid)cameraAudio.reset();
             const mime=new TextDecoder().decode(data.subarray(2,2+size));mediaStreams.get(cid)?.destroy();
-            mediaStreams.set(cid,new CameraStream(mime,data.slice(2+size),ratio=>cameraRatios.set(cid,ratio)));
+            const Media=window.ManagedMediaSource || window.MediaSource;
+            if(cid>HD_OFFSET && !Media?.isTypeSupported(mime)) {
+              const selected=hdSelection;hdSelection=null;
+              if(selected)drawCached({camera_id:selected.cid},selected.element);
+              subscribe();toast("Браузер не поддерживает HD этой камеры");
+            } else mediaStreams.set(cid,new CameraStream(mime,data.slice(2+size),ratio=>cameraRatios.set(cid,ratio)));
           } else if(kind===2 || kind===3)mediaStreams.get(cid)?.receive(kind,data);
           if(kind>=1 && kind<=3)incoming.add(cid);
         }
@@ -375,7 +403,9 @@ function connectVideo() {
     } catch { ws.close();return; }
     if(incoming.size) {
       const tiles = new Map(state.layout.tiles.map(t => [t.id,t]));
-      document.querySelectorAll(".tile").forEach(element => { const tile = tiles.get(element.dataset.tile); if(incoming.has(tile?.camera_id)) drawCached(tile,element); });
+      let audioChanged=false;
+      document.querySelectorAll(".tile").forEach(element => { const tile = tiles.get(element.dataset.tile); if(incoming.has(tile?.camera_id) || (hdSelection?.element===element && incoming.has(tile.camera_id+HD_OFFSET))) audioChanged=drawCached(tile,element) || audioChanged; });
+      if(audioChanged)subscribe();
     }
   };
   ws.onclose = event => { if(epoch !== socketEpoch) return;showMotion();stopCameraAudio(); document.querySelectorAll(".tile").forEach(clearTile); if(event.code === 4401) signedOut("Сессия завершена. Войдите снова"); else if(event.code === 4403) { toast("Права доступа изменились"); refresh().then(() => { reconnectTimer = setTimeout(connectVideo,1500); }); } else reconnectTimer = setTimeout(connectVideo,2000); };
@@ -388,8 +418,8 @@ window.addEventListener("offline", () => { toast("Нет сети. Эфир во
 window.addEventListener("online", () => { if(me) { refresh(); connectVideo(); } else boot(); });
 window.addEventListener("camera-playback-policy",event=>{const button=document.querySelector("#start-playback");if(button)button.hidden=!event.detail.blocked;});
 document.addEventListener("visibilitychange", () => { if(document.hidden) { flushSave(); stopVideo(); } else if(me && page === "wall") { refresh(); connectVideo(); } });
-document.addEventListener("fullscreenchange", () => { if(cameraFullscreen && document.fullscreenElement!==cameraFullscreen && !cameraFullscreen.classList.contains("video-expanded"))cameraFullscreen=null; });
-document.addEventListener("keydown",event=>{if(event.key==="Escape" && cameraFullscreen?.classList.contains("video-expanded")){cameraFullscreen.classList.remove("video-expanded");cameraFullscreen=null;}});
+document.addEventListener("fullscreenchange", () => { if(cameraFullscreen && document.fullscreenElement!==cameraFullscreen && !cameraFullscreen.classList.contains("video-expanded"))finishCameraFullscreen(); });
+document.addEventListener("keydown",event=>{if(event.key==="Escape" && cameraFullscreen?.classList.contains("video-expanded")){cameraFullscreen.classList.remove("video-expanded");finishCameraFullscreen();}});
 let resizeTimer;
 window.addEventListener("resize", () => { clearTimeout(resizeTimer);resizeTimer=setTimeout(()=>{const wall=document.querySelector("#wall");if(!me || page!=="wall" || cameraFullscreen?.isConnected || !wall)return;const columns=Math.min(state.layout.columns,Math.max(1,Math.floor((wall.clientWidth-16)/150)));if(columns!==+wall.style.getPropertyValue("--columns"))renderTiles();},150); });
 function installPullToRefresh() {
