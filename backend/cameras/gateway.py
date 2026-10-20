@@ -13,6 +13,7 @@ import time
 
 from aiohttp import web, WSMsgType
 from .relay import RelayPool, pack_encoded, pack_audio
+from .recorder import Recorder
 
 from ..paths import ROOT
 
@@ -34,6 +35,8 @@ def gateway_app(token, pool=None):
             return web.json_response({'error':'Media worker unavailable'},status=503)
     app = web.Application(middlewares=[auth],client_max_size=16384)
     sockets = set()
+    recorder=Recorder()
+    archive_slots=set()
     async def configure(value):
         if not isinstance(value,dict) or set(value) != {'SERIAL_NUM','USERNAME','PASSWORD'} or any(not isinstance(v,str) or not 1<=len(v)<=256 for v in value.values()):
             raise ValueError()
@@ -50,6 +53,7 @@ def gateway_app(token, pool=None):
         await ws.prepare(request)
         sockets.add(ws)
         selected, sent = set(),{}
+        motion_sent,motion_at=None,0
         audio_selected, audio_sent = set(),{}
         initial = await ws.receive_json(timeout=10)
         await configure(initial['config'])
@@ -82,6 +86,11 @@ def gateway_app(token, pool=None):
                 states,payload = pack_encoded(sources,sent)
                 payload += pack_audio({cid:sources[cid] for cid in audio_selected if cid in sources},audio_sent)
                 await asyncio.wait_for(ws.send_json(dict(cameras=states)),5)
+                if hasattr(streams, 'motion'):
+                    motion=streams.motion(selected)
+                    if motion!=motion_sent or time.monotonic()-motion_at>=5:
+                        await asyncio.wait_for(ws.send_json(dict(motion=motion)),5)
+                        motion_sent,motion_at=motion,time.monotonic()
                 if payload:
                     await asyncio.wait_for(ws.send_bytes(payload),5)
                 await asyncio.sleep(.12)
@@ -93,11 +102,47 @@ def gateway_app(token, pool=None):
             sockets.discard(ws)
             await ws.close()
         return ws
+    async def archive(request):
+        if len(archive_slots)>=3:
+            raise web.HTTPTooManyRequests()
+        ws=web.WebSocketResponse(heartbeat=15,max_msg_size=16384)
+        await ws.prepare(request)
+        archive_slots.add(ws);sockets.add(ws)
+        stream=reading=receiving=None
+        try:
+            initial=await ws.receive_json(timeout=10)
+            config=initial.pop('config')
+            # Reuse credential validation without replacing the live pool.
+            if not isinstance(config,dict) or set(config)!={'SERIAL_NUM','USERNAME','PASSWORD'} or any(not isinstance(v,str) or not 1<=len(v)<=256 for v in config.values()):
+                raise ValueError()
+            if initial.get('action') not in ('search','play'):
+                raise ValueError()
+            stream=recorder.records(config,initial)
+            reading=asyncio.create_task(anext(stream));receiving=asyncio.create_task(ws.receive())
+            while not ws.closed:
+                done,_=await asyncio.wait((reading,receiving),return_when=asyncio.FIRST_COMPLETED)
+                if receiving in done:
+                    break
+                meta,data=reading.result()
+                await asyncio.wait_for(ws.send_json(dict(meta=meta,size=len(data))),5)
+                if data:
+                    await asyncio.wait_for(ws.send_bytes(data),5)
+                if meta['type'] in ('result','end','error'):
+                    break
+                reading=asyncio.create_task(anext(stream))
+        finally:
+            for task in (reading,receiving):
+                if task:task.cancel()
+            await asyncio.gather(*(task for task in (reading,receiving) if task),return_exceptions=True)
+            if stream:await stream.aclose()
+            sockets.discard(ws);archive_slots.discard(ws);await ws.close()
+        return ws
     async def shutdown(app):
         await asyncio.gather(*(ws.close(code=1001) for ws in tuple(sockets)))
         await streams.close()
     app.router.add_post('/catalog',catalog)
     app.router.add_get('/live',live)
+    app.router.add_get('/archive',archive)
     app.on_shutdown.append(shutdown)
     return app
 

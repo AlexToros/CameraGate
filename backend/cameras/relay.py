@@ -141,6 +141,11 @@ class RelayPool:
         self.task = None
         self.closed = False
         self.cache_bytes = 0
+        self.motion_ids, self.motion_at = set(), 0
+
+    def motion(self, camera_ids):
+        available = bool(self.motion_at) and time.monotonic()-self.motion_at < 10
+        return dict(available=available, camera_ids=sorted(self.motion_ids.intersection(camera_ids)) if available else [])
 
     def _ensure(self, ids, touch=False):
         if not self.config or self.closed:
@@ -174,6 +179,12 @@ class RelayPool:
             self.cache_bytes -= source.size+len(source.init)
 
     def ingest(self, meta, data):
+        if meta.get('type') == 'motion':
+            ids = meta.get('camera_ids', [])
+            if isinstance(ids,list) and len(ids)<=256 and all(type(cid) is int and 1<=cid<=256 for cid in ids):
+                self.motion_ids = set(ids) if meta.get('available') else set()
+                self.motion_at = time.monotonic() if meta.get('available') else 0
+            return
         source = self.sources.get(meta.get('cid'))
         if source is None or meta.get('token') != source.token:
             return
@@ -242,6 +253,7 @@ class RelayPool:
             except (OSError, ValueError, KeyError, RuntimeError, asyncio.IncompleteReadError, asyncio.TimeoutError):
                 LOG.warning('media_worker_restart')
             finally:
+                self.motion_ids, self.motion_at = set(), 0
                 if writer:
                     writer.cancel()
                     await asyncio.gather(writer, return_exceptions=True)
@@ -253,6 +265,7 @@ class RelayPool:
             delay = min(30, delay*2)
 
     async def replace(self, config):
+        self.motion_ids, self.motion_at = set(), 0
         self.device_info = None
         self.config = None
         if self.task:

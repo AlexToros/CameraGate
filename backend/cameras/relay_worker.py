@@ -15,6 +15,7 @@ import time
 import uuid
 
 from .audio import AudioClock
+from .motion import MotionMonitor
 from .mp4 import Muxer, parameter_sets, ReorderedStream
 from .vesta import Transport, Frames, discover
 
@@ -189,6 +190,8 @@ def main():
     hub = None
     try:
         hub = Transport(discover(), None)
+        monitor = MotionMonitor(hub, config, outbox, stopping, connecting)
+        threading.Thread(target=monitor.run, daemon=True).start()
         offline_since = None
         while not stopping.is_set():
             if hub.sdk.vv_nat_get_status() != 1:

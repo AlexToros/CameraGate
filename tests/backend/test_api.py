@@ -70,6 +70,21 @@ class FakeStreams:
         pass
 
 
+class FakeRecorder:
+    def __init__(self):
+        self.search_calls=[];self.play_calls=[];self.closed=asyncio.Event()
+    async def search(self,config,cid,date,cursor):
+        self.search_calls.append((cid,date,cursor))
+        return dict(type='result',files=[dict(file='/private/channel-record.h264',start=date+' 00:00:00',end=date+' 01:00:00')],cursor=None)
+    async def records(self,config,request):
+        self.play_calls.append(request)
+        try:
+            yield dict(type='init',mime='video/mp4; codecs="avc1.42E01E"'),b'init'
+            yield dict(type='media'),b'media'
+            await asyncio.Event().wait()
+        finally:self.closed.set()
+
+
 class ApiTests(unittest.IsolatedAsyncioTestCase):
     setUpClass = classmethod(DatabaseCase.setUpClass.__func__)
     tearDownClass = classmethod(DatabaseCase.tearDownClass.__func__)
@@ -98,6 +113,113 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         token = self.store.register(dict(login='viewer',password=PASSWORD,token=invite['token']))
         user,session = self.store.user(token)
         return user, {'Cookie':COOKIE+'='+token,'X-CSRF-Token':session['csrf']},session['csrf']
+
+    async def test_archive_requires_admin_csrf_and_private_record_reference(self):
+        archive=self.app[PORTAL].archive;recorder=archive.recorder=FakeRecorder()
+        self.streams.config={'test':True}
+        _,headers,_=await self.viewer()
+        query=dict(camera_id=1,date='2026-10-20')
+        self.assertEqual((await self.client.post('/api/admin/archive/search',headers=headers,json=query)).status,403)
+        self.assertEqual((await self.client.post('/api/admin/archive/search',json=query)).status,403)
+        self.assertEqual(recorder.search_calls,[])
+        with self.assertRaises(WSServerHandshakeError):
+            await self.client.ws_connect('/api/admin/archive/play',headers=headers)
+        response=await self.client.post('/api/admin/archive/search',headers=self.headers,json=query)
+        self.assertEqual(response.status,200)
+        result=await response.json();record=result['records'][0]
+        self.assertNotIn('/private',str(result));self.assertEqual(record['duration'],3600)
+        self.assertEqual(recorder.search_calls,[(1,'2026-10-20',None)])
+        ws=await self.client.ws_connect('/api/admin/archive/play')
+        await ws.send_json(dict(csrf='wrong',id=record['id']))
+        self.assertEqual((await ws.receive_json())['type'],'error')
+        await ws.close();self.assertEqual(recorder.play_calls,[])
+        ws=await self.client.ws_connect('/api/admin/archive/play')
+        await ws.send_json(dict(csrf=self.me['csrf'],id='/private/channel-record.h264'))
+        self.assertEqual((await ws.receive_json())['type'],'error')
+        await ws.close();self.assertEqual(recorder.play_calls,[])
+
+    async def test_archive_stream_revokes_role_and_cleans_up_native_reader(self):
+        archive=self.app[PORTAL].archive;recorder=archive.recorder=FakeRecorder()
+        self.streams.config={'test':True}
+        response=await self.client.post('/api/admin/archive/search',headers=self.headers,json=dict(camera_id=2,date='2026-10-20'))
+        record=(await response.json())['records'][0]
+        ws=await self.client.ws_connect('/api/admin/archive/play')
+        await ws.send_json(dict(csrf=self.me['csrf'],id=record['id'],offset=120))
+        self.assertEqual((await ws.receive_json(timeout=3))['type'],'init')
+        self.assertEqual((await ws.receive(timeout=3)).data,b'init')
+        self.assertEqual((await ws.receive(timeout=3)).data,b'media')
+        self.assertEqual(recorder.play_calls[0]['entry']['cid'],2)
+        self.assertEqual(recorder.play_calls[0]['offset'],120)
+        invite=self.store.invite(self.me['user']['id'],dict(first_name='Admin',last_name='Other',role='admin'))
+        token=self.store.register(dict(login='otheradmin',password=PASSWORD,token=invite['token']))
+        other,_=self.store.user(token)
+        original=self.store.snapshot['users'][self.me['user']['id']]
+        self.store.edit_user(other['id'],original['id'],dict(self.store.public_user(original),role='user',camera_ids=[1],group_ids=[]))
+        self.assertEqual((await ws.receive_json(timeout=3))['type'],'error')
+        await ws.receive(timeout=3)
+        await asyncio.wait_for(recorder.closed.wait(),3)
+        self.assertEqual(archive.viewers,{})
+        await ws.close()
+
+    async def test_motion_messages_only_include_authorized_subscribed_cameras(self):
+        self.streams.config={'test':True}
+        moving={1,2}
+        self.streams.motion=lambda ids:dict(available=True,camera_ids=sorted(moving.intersection(ids)))
+        _,headers,csrf=await self.viewer()
+        ws=await self.client.ws_connect('/api/live',headers=headers)
+        await ws.send_json(dict(csrf=csrf,camera_ids=[1]))
+        await ws.receive(timeout=3);await ws.receive(timeout=3)
+        self.assertEqual(await ws.receive_json(timeout=3),dict(type='motion',available=True,camera_ids=[1]))
+        moving.clear()
+        self.assertEqual(await ws.receive_json(timeout=3),dict(type='motion',available=True,camera_ids=[]))
+        await ws.close()
+
+    async def test_archive_references_are_owner_bound_and_config_changes_stop_playback(self):
+        archive=self.app[PORTAL].archive;recorder=archive.recorder=FakeRecorder()
+        self.streams.config={'test':True}
+        response=await self.client.post('/api/admin/archive/search',headers=self.headers,json=dict(camera_id=1,date='2026-10-20'))
+        record=(await response.json())['records'][0]
+        invite=self.store.invite(self.me['user']['id'],dict(first_name='Admin',last_name='Second',role='admin'))
+        token=self.store.register(dict(login='secondadmin',password=PASSWORD,token=invite['token']))
+        _,session=self.store.user(token)
+        other=await self.client.ws_connect('/api/admin/archive/play',headers={'Cookie':COOKIE+'='+token})
+        await other.send_json(dict(csrf=session['csrf'],id=record['id']))
+        self.assertEqual((await other.receive_json(timeout=3))['type'],'error');await other.close()
+        self.assertEqual(recorder.play_calls,[])
+        ws=await self.client.ws_connect('/api/admin/archive/play')
+        await ws.send_json(dict(csrf=self.me['csrf'],id=record['id']))
+        await ws.receive_json(timeout=3);await ws.receive(timeout=3);await ws.receive(timeout=3)
+        self.streams.config={'test':'changed'}
+        self.assertEqual((await ws.receive_json(timeout=3))['type'],'error')
+        await asyncio.wait_for(recorder.closed.wait(),3);await ws.close()
+
+    async def test_replacing_archive_waits_for_previous_reader_cleanup(self):
+        class SlowRecorder(FakeRecorder):
+            active=peak=0
+            async def records(self,config,request):
+                self.active+=1;self.peak=max(self.peak,self.active)
+                try:
+                    yield dict(type='init',mime='video/mp4'),b'init'
+                    await asyncio.Event().wait()
+                finally:
+                    await asyncio.sleep(.05)
+                    self.active-=1
+        archive=self.app[PORTAL].archive;recorder=archive.recorder=SlowRecorder()
+        self.streams.config={'test':True}
+        response=await self.client.post('/api/admin/archive/search',headers=self.headers,json=dict(camera_id=1,date='2026-10-20'))
+        record=(await response.json())['records'][0]
+        first=await self.client.ws_connect('/api/admin/archive/play')
+        await first.send_json(dict(csrf=self.me['csrf'],id=record['id']))
+        await first.receive_json(timeout=3);await first.receive(timeout=3)
+        second=await self.client.ws_connect('/api/admin/archive/play')
+        await second.send_json(dict(csrf=self.me['csrf'],id=record['id'],offset=10))
+        self.assertEqual((await second.receive_json(timeout=3))['type'],'init')
+        self.assertEqual(recorder.peak,1)
+        await first.close();await second.close()
+        for _ in range(40):
+            if not recorder.active:break
+            await asyncio.sleep(.02)
+        self.assertEqual(recorder.active,0)
 
     async def test_csrf_roles_private_files_and_write_only_credentials(self):
         for path in ('/.env','/.runtime/data/secret.key','/store.py','/backend/store.py','/database/schema.sql','/frontend/README.md'):

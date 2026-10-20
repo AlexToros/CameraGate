@@ -37,7 +37,11 @@ class RemotePool(RelayPool):
                         try:
                             async for message in ws:
                                 if message.type == WSMsgType.TEXT:
-                                    states = json.loads(message.data).get('cameras',{})
+                                    value = json.loads(message.data)
+                                    if 'motion' in value:
+                                        self.ingest(dict(type='motion', **value['motion']), b'')
+                                        continue
+                                    states = value.get('cameras',{})
                                     for cid,source in self.sources.items():
                                         state = states.get(str(cid),'Подключение…')
                                         if state != 'Прямой эфир':
@@ -68,6 +72,7 @@ class RemotePool(RelayPool):
             except asyncio.CancelledError:
                 raise
             except Exception:
+                self.motion_ids, self.motion_at = set(), 0
                 for source in self.sources.values():
                     source.reset('Сервис видео недоступен. Повтор подключения…')
                 self.cache_bytes = 0

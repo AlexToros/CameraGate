@@ -16,6 +16,7 @@ from .store import Store, Problem
 from .cameras.streams import make_pool
 from .cameras.relay import pack_encoded, pack_audio
 from .paths import ROOT, FRONTEND
+from .archive import Archive
 
 COOKIE = 'viewer_session'
 LOG = logging.getLogger('portal')
@@ -46,6 +47,7 @@ class Portal:
         self.connection_status = 'checking' if streams and streams.config else 'not_configured'
         self.background = set()
         self.sockets = set()
+        self.archive = Archive(self)
 
     async def call(self, fn, *args):
         return await asyncio.to_thread(fn, *args)
@@ -169,6 +171,8 @@ class Portal:
             return web.json_response(await self.call(self.store.save_layout,user,data))
         if path == '/api/admin/users' and method == 'GET':
             return web.json_response({'users':[self.store.public_user(u) for u in self.store.snapshot['users'].values()]})
+        if path == '/api/admin/archive/search' and method == 'POST':
+            return await self.archive.search(request,data,user)
         if path.startswith('/api/admin/users/') and method == 'PUT':
             await self.call(self.store.edit_user,user['id'],numeric_tail(path),data)
         elif path == '/api/admin/invites' and method == 'GET':
@@ -209,6 +213,7 @@ class Portal:
         await ws.prepare(request)
         self.sockets.add(ws)
         selected, sent, statuses = set(), {}, {}
+        motion_status = None
         authenticated = False
         audio_camera = None
         audio_sent = {}
@@ -270,6 +275,11 @@ class Portal:
                         await asyncio.wait_for(ws.send_json(dict(type='status',cameras=state)),5)
                     if payload:
                         await asyncio.wait_for(ws.send_bytes(payload),5)
+                    if hasattr(self.streams, 'motion'):
+                        motion = self.streams.motion(selected)
+                        if motion != motion_status:
+                            motion_status = motion
+                            await asyncio.wait_for(ws.send_json(dict(type='motion', **motion)),5)
                 elif authenticated:
                     state = {str(cid):'Подключение не настроено. Обратитесь к администратору' for cid in selected}
                     if state != statuses:
@@ -326,8 +336,9 @@ def create_app(store, streams=None, secure=False, auto_sync=True):
     app = web.Application(middlewares=[errors],client_max_size=256*1024)
     app[PORTAL] = portal
     app.router.add_get('/api/live',portal.live)
+    app.router.add_get('/api/admin/archive/play',portal.archive.play)
     app.router.add_route('*','/api/{tail:.*}',portal.api)
-    assets = {'/':'index.html','/app.js':'app.js','/admin.js':'admin.js','/audio.js':'audio.js','/player.js':'player.js','/style.css':'style.css','/manifest.webmanifest':'manifest.webmanifest',
+    assets = {'/':'index.html','/app.js':'app.js','/admin.js':'admin.js','/archive.js':'archive.js','/audio.js':'audio.js','/player.js':'player.js','/style.css':'style.css','/manifest.webmanifest':'manifest.webmanifest',
               '/sw.js':'sw.js','/icon-192.png':'icons/icon-192.png','/icon-512.png':'icons/icon-512.png','/apple-touch-icon.png':'icons/apple-touch-icon.png'}
     async def asset(request):
         return web.FileResponse(FRONTEND/assets[request.path])

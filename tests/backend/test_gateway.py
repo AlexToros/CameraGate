@@ -12,12 +12,15 @@ from backend.cameras.gateway import gateway_app
 from backend.cameras.gateway_client import RemotePool
 from tests.backend.test_api import FakeStreams
 from backend.cameras.streams import StreamPool
+from backend.cameras.recorder import RemoteRecorder
+from tests.backend.test_api import FakeRecorder
 
 
 class GatewayTests(unittest.IsolatedAsyncioTestCase):
     async def test_gateway_auth_and_multiplexed_transport(self):
         token = secrets.token_urlsafe(48)
         upstream = FakeStreams()
+        upstream.motion=lambda ids:dict(available=True,camera_ids=sorted({1}.intersection(ids)))
         client = TestClient(TestServer(gateway_app(token,upstream)))
         await client.start_server()
         self.assertEqual((await client.post('/catalog',json={})).status,403)
@@ -44,6 +47,10 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
                     while not sources[1].audio and time.monotonic()<deadline:await asyncio.sleep(.02)
                     self.assertTrue(sources[1].audio)
                     self.assertTrue(sources[2].audio)
+                    deadline=time.monotonic()+3
+                    while not remote.motion({1})['camera_ids'] and time.monotonic()<deadline:await asyncio.sleep(.02)
+                    self.assertEqual(remote.motion({1})['camera_ids'],[1])
+                    self.assertEqual(remote.motion({2})['camera_ids'],[])
                     self.assertEqual(remote.subscribe([1])[1],sources[1])
                     await remote.replace(dict(config,PASSWORD='new-test-password'))
                     self.assertFalse(remote.sources)
@@ -52,6 +59,26 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
                     await remote.close()
         finally:
             await client.close()
+
+    async def test_private_archive_gateway_stream_and_disconnect_cleanup(self):
+        token=secrets.token_urlsafe(48);recorder=FakeRecorder()
+        with patch('backend.cameras.gateway.Recorder',return_value=recorder):
+            client=TestClient(TestServer(gateway_app(token,FakeStreams())))
+        await client.start_server()
+        config=dict(SERIAL_NUM='test-id',USERNAME='user',PASSWORD='password')
+        try:
+            self.assertEqual((await client.get('/archive')).status,403)
+            with tempfile.TemporaryDirectory() as directory:
+                key=Path(directory)/'token';key.write_text(token)
+                with patch.dict(os.environ,dict(STREAM_GATEWAY=str(client.make_url('')).rstrip('/'),GATEWAY_TOKEN_FILE=str(key))):
+                    remote=RemoteRecorder()
+                    stream=remote.records(config,dict(action='play',entry={},offset=0))
+                    meta,data=await anext(stream)
+                    self.assertEqual(meta['type'],'init');self.assertEqual(data,b'init')
+                    self.assertEqual((await anext(stream))[1],b'media')
+                    await stream.aclose()
+                    await asyncio.wait_for(recorder.closed.wait(),3)
+        finally:await client.close()
 
     async def test_native_pool_deduplicates_viewers_and_clears_on_config_change(self):
         class FakeSource:

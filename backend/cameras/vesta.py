@@ -233,7 +233,7 @@ class Transport:
                 raise TransportClosed('P2P-соединение закрыто: %d' % data[1])
             self.buffer.extend(data)
 
-    def request(self, mid, payload, timeout=10):
+    def request(self, mid, payload, timeout=10, accepted=(100, 515)):
         self.send(mid, payload)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -243,7 +243,7 @@ class Transport:
                 raise RequestTimeout(mid) from None
             if fields[-2] == mid + 1:
                 reply = json.loads(body.rstrip(b'\n\0'))
-                if reply.get('Ret') not in (100, 515):
+                if reply.get('Ret') not in accepted:
                     raise ConnectionError('Регистратор отклонил команду: %s' % reply.get('Ret'))
                 return fields, reply
         raise RequestTimeout(mid)
@@ -310,7 +310,7 @@ class Frames:
     def feed(self, data):
         return b''.join(unit[0] for unit in self.feed_units(data))
 
-    def feed_units(self, data, audio=None):
+    def feed_units(self, data, audio=None, key_times=None):
         self.buffer.extend(data)
         output = []
         cursor = 0
@@ -343,6 +343,8 @@ class Frames:
                 self.keyframes += 1
                 self.ready = True
             if self.ready and kind in (0xfc, 0xfe, 0xfd):
+                if key_times is not None and header == 16:
+                    key_times[len(output)] = struct.unpack_from('<I',self.buffer,marker+8)[0]
                 output.append((bytes(self.buffer[marker + header:end]), header == 16, self.codec, self.fps))
             if audio is not None and kind == 0xfa and self.buffer[marker+4:marker+6] == b'\x0e\x02' and 0 < length <= 4096:
                 audio.append(bytes(self.buffer[marker+header:end]))
