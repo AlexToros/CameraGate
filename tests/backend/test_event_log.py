@@ -98,6 +98,14 @@ class EventJournalTests(unittest.TestCase):
         self.assertEqual(len(files),3)
         self.assertTrue(all(stat.S_IMODE(file.stat().st_mode)==0o600 for file in files))
 
+    def test_unpaired_unicode_escape_does_not_stop_logging_later_events(self):
+        self.journal.record((0,1504,0),b'{"Name":"\\ud800"}')
+        self.journal.record((0,1504,0),b'{"Rect":[1,2,3,4]}')
+        self.wait_written(2)
+        entries=[json.loads(line) for line in self.path.read_text().splitlines()]
+        self.assertEqual(entries[1]['body']['Rect'],[1,2,3,4])
+        self.assertEqual(self.journal.stats()['write_failures'],0)
+
     def test_api_diagnostics_only_expose_log_counters(self):
         pool=RelayPool()
         pool.ingest(dict(type='heartbeat',event_log=dict(written=3,dropped=0,write_failures=1,

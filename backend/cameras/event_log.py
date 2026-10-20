@@ -90,11 +90,13 @@ class EventJournal:
                 # its identity/size, without writing unsafe raw bytes.
                 metadata['body_omitted']='non_json'
         line=json.dumps(metadata,ensure_ascii=False,separators=(',',':'))
-        if len(line.encode('utf-8'))>2*MAX_BODY:
+        encoded=line.encode('utf-8',errors='backslashreplace')
+        if len(encoded)>2*MAX_BODY:
             metadata.pop('body',None)
             metadata['body_omitted']='encoded_size_limit'
             line=json.dumps(metadata,separators=(',',':'))
-        return line
+            return line
+        return encoded.decode('utf-8')
 
     def stats(self):
         with self.condition:
