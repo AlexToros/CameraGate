@@ -52,6 +52,16 @@ class SessionHealthTests(unittest.TestCase):
         now[0]=519;self.assertFalse(health.expired)
         now[0]=520;self.assertTrue(health.expired)
 
+    def test_explicit_session_transport_failure_is_immediate(self):
+        health=SessionHealth(clock=lambda:0,timeout=180)
+        for error in ('TransportClosed','RequestTimeout','TimeoutError'):
+            self.assertEqual(health.observe(dict(type='session',ready=False,error=error)), 'recorder_session_transport_error')
+        self.assertFalse(health.expired)
+        self.assertIsNone(health.observe(dict(type='status',cid=1,error='TransportClosed')))
+        self.assertIsNone(health.observe(dict(type='motion',error='TimeoutError')))
+        self.assertIsNone(health.observe(dict(type='session',ready=False,error='ConnectionError')))
+        self.assertIsNone(health.observe(dict(type='session',ready=True,error='TransportClosed')))
+
     def test_non_boolean_ready_does_not_count_as_verification(self):
         now=[0];health=SessionHealth(clock=lambda:now[0],timeout=180)
         now[0]=180;health.observe(dict(type='session',ready=1))
@@ -222,6 +232,12 @@ sys.stdin.read()
             await pool.close()
 
     async def test_failed_session_with_live_heartbeat_recreates_one_shared_worker(self):
+        await self.recover_session_worker('ConnectionError','recorder_session_timeout',True)
+
+    async def test_explicit_shared_transport_error_restarts_without_waiting_for_timeout(self):
+        await self.recover_session_worker('TransportClosed','recorder_session_transport_error',False)
+
+    async def recover_session_worker(self,error,reason,expire):
         worker = r"""
 import json,signal,struct,sys,time
 initial=json.loads(sys.stdin.readline())
@@ -232,7 +248,7 @@ def emit(meta,data=b''):
     sys.stdout.buffer.flush()
 if generation=='1':
     signal.signal(signal.SIGTERM,signal.SIG_IGN)
-    emit(dict(type='session',ready=False,error='TransportClosed'))
+    emit(dict(type='session',ready=False,error=sys.argv[2]))
     while True:
         emit(dict(type='heartbeat'))
         time.sleep(.01)
@@ -246,11 +262,11 @@ else:
 """
         create=asyncio.create_subprocess_exec;processes=[];now=[0]
         async def launch(*args,**kwargs):
-            process=await create(sys.executable,'-c',worker,str(len(processes)+1),**kwargs)
+            process=await create(sys.executable,'-c',worker,str(len(processes)+1),error,**kwargs)
             processes.append(process);return process
         pool=RelayPool({'test':True});ingest=pool.ingest
         def observe(meta,data):
-            if meta.get('type')=='heartbeat' and len(processes)==1:now[0]=181
+            if expire and meta.get('type')=='heartbeat' and len(processes)==1:now[0]=181
             ingest(meta,data)
         try:
             with patch('backend.cameras.relay.asyncio.create_subprocess_exec',side_effect=launch),patch('backend.cameras.relay.SessionHealth',side_effect=lambda:SessionHealth(clock=lambda:now[0])),patch.object(pool,'ingest',side_effect=observe):
@@ -262,7 +278,8 @@ else:
                 self.assertEqual(len(processes),2)
                 self.assertIsNotNone(processes[0].returncode)
                 self.assertEqual(pool.worker_restarts,1)
-                self.assertEqual(pool.last_restart_reason,'recorder_session_timeout')
+                self.assertEqual(pool.last_restart_reason,reason)
+                if not expire:self.assertEqual(now[0],0)
                 self.assertEqual(set(pool.sources),{1,2,3})
                 await pool.replace(None)
                 self.assertTrue(all(process.returncode is not None for process in processes))

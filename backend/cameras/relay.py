@@ -21,6 +21,7 @@ MAX_CACHE = 64*1024*1024
 
 
 SESSION_RECOVERY_TIMEOUT = 180
+SESSION_TRANSPORT_ERRORS = frozenset({'TransportClosed', 'RequestTimeout', 'TimeoutError'})
 
 
 class SessionHealth:
@@ -36,6 +37,10 @@ class SessionHealth:
         # Repeated failed logins must not extend the recovery deadline.
         if meta.get('type') == 'session' and meta.get('ready') is True:
             self.verified_at = self.clock()
+        elif (meta.get('type') == 'session' and meta.get('ready') is False
+              and meta.get('error') in SESSION_TRANSPORT_ERRORS):
+            return 'recorder_session_transport_error'
+        return None
 
     @property
     def expired(self):
@@ -336,8 +341,11 @@ class RelayPool:
                     data = await asyncio.wait_for(process.stdout.readexactly(size), 5) if size else b''
                     if meta['type'] == 'worker_error':
                         raise RuntimeError('Media worker unavailable')
-                    self.session_health.observe(meta)
+                    failure = self.session_health.observe(meta)
                     self.ingest(meta, data)
+                    if failure:
+                        reason = failure
+                        raise ConnectionError('Recorder control transport failed')
                     if self.session_health.expired:
                         reason = 'recorder_session_timeout'
                         raise TimeoutError('Recorder session recovery deadline')
