@@ -106,6 +106,21 @@ class SharedSessionTests(unittest.TestCase):
                 self.assertEqual(FakeControl.count,1)
             finally:self.stop.set();thread.join(timeout=5);self.assertFalse(thread.is_alive())
 
+    def test_acknowledged_keepalive_publishes_session_proof(self):
+        verified=threading.Event();publish=self.out.put;proofs=[]
+        def observe(value,*args,**kwargs):
+            publish(value,*args,**kwargs)
+            if value.get('type')=='session' and value.get('ready'):
+                proofs.append(value)
+                if len(proofs)==2:verified.set()
+        self.out.put=observe
+        with patch('backend.cameras.session.Transport',FakeControl):
+            self.owner.start();lease=self.owner.wait(self.stop)
+            lease.transport.enqueue(((0,1007,0),b'{"Ret":100}'))
+            self.assertTrue(verified.wait(timeout=5))
+            self.assertEqual([item['generation'] for item in proofs],[1,1])
+            self.assertEqual(FakeControl.count,1)
+
     def test_old_lease_cannot_send_after_owner_closes(self):
         with patch('backend.cameras.session.Transport',FakeControl):
             self.owner.start();lease=self.owner.wait(self.stop);self.owner.close()

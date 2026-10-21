@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 
 from backend.cameras.mp4 import Muxer, box, codec_string, boxes, ReorderedStream, initialization
-from backend.cameras.relay import EncodedSource, RelayPool, pack_encoded, MAX_GOP
+from backend.cameras.relay import EncodedSource, RelayPool, pack_encoded, MAX_GOP, SessionHealth
 from backend.cameras.vesta import Frames
 from tests.backend.test_protocol import keyframe, delta
 
@@ -24,6 +24,38 @@ def initialized(cid=1, generation='first'):
     source.feed(dict(type='init',generation=generation,mime='video/mp4; codecs="hvc1.1.6.L90.B0"'),b'init')
     source.feed(dict(type='media',generation=generation,key=True),b'key')
     return source
+
+
+class SessionHealthTests(unittest.TestCase):
+    def test_heartbeats_and_failed_retries_do_not_extend_initial_deadline(self):
+        now=[0]
+        health=SessionHealth(clock=lambda:now[0],timeout=180)
+        self.assertIsNone(health.verified_at)
+        now[0]=179
+        for kind in ('heartbeat','motion','media','status'):
+            health.observe(dict(type=kind,ready=True))
+        health.observe(dict(type='session',ready=False,error='TransportClosed'))
+        self.assertFalse(health.expired)
+        now[0]=180
+        self.assertTrue(health.expired)
+        health.observe(dict(type='session',ready=False,error='TransportClosed'))
+        self.assertTrue(health.expired)
+
+    def test_verified_control_survives_individual_camera_failures(self):
+        now=[0]
+        health=SessionHealth(clock=lambda:now[0],timeout=180)
+        now[0]=170;health.observe(dict(type='session',ready=True))
+        now[0]=340
+        health.observe(dict(type='status',cid=1,error='TimeoutError'))
+        self.assertFalse(health.expired)
+        health.observe(dict(type='session',ready=True))
+        now[0]=519;self.assertFalse(health.expired)
+        now[0]=520;self.assertTrue(health.expired)
+
+    def test_non_boolean_ready_does_not_count_as_verification(self):
+        now=[0];health=SessionHealth(clock=lambda:now[0],timeout=180)
+        now[0]=180;health.observe(dict(type='session',ready=1))
+        self.assertTrue(health.expired)
 
 
 class FragmentsTests(unittest.TestCase):
@@ -102,6 +134,19 @@ class FragmentsTests(unittest.TestCase):
 
 
 class ContinuousPoolTests(unittest.IsolatedAsyncioTestCase):
+    async def test_camera_recovery_is_logged_once_without_payload(self):
+        pool=RelayPool({'test':True})
+        try:
+            with patch.object(pool,'run',side_effect=asyncio.Event().wait):
+                pool.maintain([1]);source=pool.sources[1]
+                base=dict(cid=1,token=source.token,generation='generation')
+                pool.ingest(dict(base,type='init',mime='video/mp4'),b'init')
+                with self.assertLogs('media',level='WARNING') as logs:
+                    pool.ingest(dict(base,type='media',key=True),b'key')
+                    pool.ingest(dict(base,type='media',key=False),b'delta')
+                self.assertEqual(logs.output,['WARNING:media:camera_media_ready cid=1'])
+        finally:await pool.close()
+
     async def test_hd_is_shared_on_demand_and_expires_without_stopping_persistent_sd(self):
         pool=RelayPool({'test':True})
         try:
@@ -175,6 +220,53 @@ sys.stdin.read()
                 self.assertFalse(pool.sources)
         finally:
             await pool.close()
+
+    async def test_failed_session_with_live_heartbeat_recreates_one_shared_worker(self):
+        worker = r"""
+import json,signal,struct,sys,time
+initial=json.loads(sys.stdin.readline())
+generation=sys.argv[1]
+def emit(meta,data=b''):
+    header=json.dumps(meta).encode()
+    sys.stdout.buffer.write(struct.pack('<II',len(header),len(data))+header+data)
+    sys.stdout.buffer.flush()
+if generation=='1':
+    signal.signal(signal.SIGTERM,signal.SIG_IGN)
+    emit(dict(type='session',ready=False,error='TransportClosed'))
+    while True:
+        emit(dict(type='heartbeat'))
+        time.sleep(.01)
+else:
+    emit(dict(type='session',ready=True,generation=2))
+    for cid in initial['camera_ids']:
+        base=dict(cid=cid,token=initial['tokens'][str(cid)],generation=generation)
+        emit(dict(base,type='init',mime='video/mp4'),b'init')
+        emit(dict(base,type='media',key=True),b'key')
+    sys.stdin.read()
+"""
+        create=asyncio.create_subprocess_exec;processes=[];now=[0]
+        async def launch(*args,**kwargs):
+            process=await create(sys.executable,'-c',worker,str(len(processes)+1),**kwargs)
+            processes.append(process);return process
+        pool=RelayPool({'test':True});ingest=pool.ingest
+        def observe(meta,data):
+            if meta.get('type')=='heartbeat' and len(processes)==1:now[0]=181
+            ingest(meta,data)
+        try:
+            with patch('backend.cameras.relay.asyncio.create_subprocess_exec',side_effect=launch),patch('backend.cameras.relay.SessionHealth',side_effect=lambda:SessionHealth(clock=lambda:now[0])),patch.object(pool,'ingest',side_effect=observe):
+                pool.maintain([1,2,3])
+                for _ in range(500):
+                    if all(source.frames and source.generation=='2' for source in pool.sources.values()):break
+                    await asyncio.sleep(.02)
+                self.assertTrue(all(source.frames and source.generation=='2' for source in pool.sources.values()))
+                self.assertEqual(len(processes),2)
+                self.assertIsNotNone(processes[0].returncode)
+                self.assertEqual(pool.worker_restarts,1)
+                self.assertEqual(pool.last_restart_reason,'recorder_session_timeout')
+                self.assertEqual(set(pool.sources),{1,2,3})
+                await pool.replace(None)
+                self.assertTrue(all(process.returncode is not None for process in processes))
+        finally:await pool.close()
 
     async def test_old_worker_token_and_global_cache_bound(self):
         pool=RelayPool({'test':True})

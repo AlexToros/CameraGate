@@ -20,6 +20,29 @@ MAX_BATCH = 4*1024*1024
 MAX_CACHE = 64*1024*1024
 
 
+SESSION_RECOVERY_TIMEOUT = 180
+
+
+class SessionHealth:
+    """A live IPC heartbeat cannot prove the recorder session is usable."""
+    def __init__(self, *, clock=None, timeout=SESSION_RECOVERY_TIMEOUT):
+        self.clock = clock or time.monotonic
+        self.timeout = timeout
+        self.started_at = self.clock()
+        self.verified_at = None
+
+    def observe(self, meta):
+        # Login and acknowledged KeepAlive are the only session proofs.
+        # Repeated failed logins must not extend the recovery deadline.
+        if meta.get('type') == 'session' and meta.get('ready') is True:
+            self.verified_at = self.clock()
+
+    @property
+    def expired(self):
+        since = self.started_at if self.verified_at is None else self.verified_at
+        return self.clock()-since >= self.timeout
+
+
 class EncodedSource:
     def __init__(self, cid):
         self.cid, self.token = cid, uuid.uuid4().hex
@@ -164,11 +187,16 @@ class RelayPool:
         self.motion_details={}
         self.motion_logged_at=0
         self.session_details={}
+        self.session_health = None
+        self.worker_restarts = 0
+        self.last_restart_reason = None
         self.event_log_details={}
 
     def diagnostics(self):
         now=time.monotonic()
-        return dict(session=self.session_details.copy(),event_log=self.event_log_details.copy(),motion=dict(**self.motion_details,available=self.motion(set(self.sources))['available'],
+        return dict(worker_restarts=self.worker_restarts,last_restart_reason=self.last_restart_reason,
+            session_verified_age=round(now-self.session_health.verified_at,2) if self.session_health and self.session_health.verified_at is not None else None,
+            session=self.session_details.copy(),event_log=self.event_log_details.copy(),motion=dict(**self.motion_details,available=self.motion(set(self.sources))['available'],
             active_camera_ids=sorted(self.motion_ids),snapshot_age=round(now-self.motion_at,2) if self.motion_at else None),
             sources=[dict(camera_id=source_camera(cid),profile='Main' if cid>HD_OFFSET else 'Extra1',state=s.state,frame_age=round(now-s.last_frame,3) if s.last_frame else None,
                 received_frames=s.received_frames,received_bytes=s.received_bytes,arrival_gaps=s.arrival_gaps,
@@ -219,6 +247,9 @@ class RelayPool:
             self.event_log_details={key:details[key] for key in ('written','dropped','write_failures','queued_bytes') if type(details.get(key)) is int and details[key]>=0}
             return
         if meta.get('type')=='session':
+            previous=self.session_details
+            if (meta.get('ready'),meta.get('generation'),meta.get('error')) != (previous.get('ready'),previous.get('generation'),previous.get('error')):
+                LOG.warning('recorder_session ready=%s generation=%s error=%s',meta.get('ready'),meta.get('generation'),meta.get('error'))
             self.session_details={key:meta[key] for key in ('ready','logins','generation','error') if key in meta}
             return
         if meta.get('type') == 'motion':
@@ -241,7 +272,10 @@ class RelayPool:
         if source is None or meta.get('token') != source.token:
             return
         before = source.size+len(source.init)
+        had_frame = bool(source.last_frame)
         source.feed(meta, data)
+        if not had_frame and source.last_frame:
+            LOG.warning('camera_media_ready cid=%d',source.cid)
         after = source.size+len(source.init)
         self.cache_bytes += after-before
         if self.cache_bytes > MAX_CACHE:
@@ -264,6 +298,8 @@ class RelayPool:
                 await self.changed.wait()
                 continue
             process, writer = None, None
+            reason = 'ipc_unavailable'
+            self.session_health = SessionHealth()
             try:
                 process = await asyncio.create_subprocess_exec(*command, stdin=-1, stdout=-1, stderr=-3, cwd=ROOT)
                 def selection():
@@ -300,14 +336,23 @@ class RelayPool:
                     data = await asyncio.wait_for(process.stdout.readexactly(size), 5) if size else b''
                     if meta['type'] == 'worker_error':
                         raise RuntimeError('Media worker unavailable')
+                    self.session_health.observe(meta)
                     self.ingest(meta, data)
-                    delay = 1
+                    if self.session_health.expired:
+                        reason = 'recorder_session_timeout'
+                        raise TimeoutError('Recorder session recovery deadline')
+                    # Heartbeats must not reset reconnect backoff either.
+                    if meta.get('type') == 'session' and meta.get('ready') is True:
+                        delay = 1
             except asyncio.CancelledError:
                 raise
             except (OSError, ValueError, KeyError, RuntimeError, asyncio.IncompleteReadError, asyncio.TimeoutError):
-                LOG.warning('media_worker_restart')
+                self.worker_restarts += 1
+                self.last_restart_reason = reason
+                LOG.warning('media_worker_restart reason=%s',reason)
             finally:
                 self.event_log_details={}
+                self.session_health = None
                 self.session_details={}
                 self.motion_ids, self.motion_at = set(), 0
                 if writer:

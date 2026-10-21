@@ -140,6 +140,7 @@ class SharedSession:
                         if reply.get('Ret') not in (100,515):
                             raise ConnectionError('Recorder session expired')
                         pending = None
+                        self.publish(True)
                     elif mid in (1501,1504,1021) and len(body)<=65536:
                         listener = self.listener
                         if listener is not None and listener.lease is lease:
